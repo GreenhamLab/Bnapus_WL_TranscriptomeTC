@@ -51,6 +51,7 @@ require(edgeR)
 require(DiPALM)
 require(ggrepel)
 require(zoo)
+require(ggh4x)
 })
 ```
 First, create the following directories:
@@ -2149,114 +2150,235 @@ dev.off()
 
 Figure 7 - Differential GSL and sulfur content in St and Mu. The raw data can be found at the University of Minnesota's data repository 'DRUM' (https://conservancy.umn.edu/collections/6c548d8b-0f3a-4f6b-b16e-4154c88136c0) under the same name as the manuscript title. See "Methods/Metabolomics" for details on how the data was processed. 
 ```{r Figure 7}
-gsls = read_xlsx(file.path(inPath, file = "MetabolomicsData.xlsx"), sheet = "R_output_DblExclude")
-## Clean up the DF
-gsls = gsls[, -c(5:6)]
+dat = read_xlsx("20241217_Batch3_FixedTechNorm.xlsx", sheet = "R_output_FinalExclude")
 
-## Make separate Sulfoquinose and RA columns (non-GSLs)
-NonGSL = gsls %>% select(!c(SIN:NAS))
+# Grab just the gsls
+gsl = dat[, -c(9, 11, 13, 17)]
+# Save the non GSL featuers for later
+NonGSL = dat[, c(1:6, 9, 11, 13, 17)]
 
-gsls = gsls[,-c(13:15)]
+# Make SIN and GJV numeric
+gsl = gsl %>% mutate(SIN = as.numeric(SIN))
+gsl = gsl %>% mutate(GJV = as.numeric(GJV))
+gsl = gsl %>% pivot_longer(cols = c(7:13), names_to = "GSL", values_to = "PeakArea")
+NonGSL = NonGSL %>% pivot_longer(cols = c(7:10), names_to = "NonGSL", values_to = "PeakArea")
 
-## Pivot the GSLs into a single column to plot
-gsls = gsls %>% pivot_longer(cols = 5:12, names_to = "GSL", values_to = "PeakArea")
+gsl = gsl %>% mutate(LogArea = log2(PeakArea))
+NonGSL = NonGSL %>% mutate(LogArea = log2(PeakArea))
+# Switch -Inf to NAs
+gsl$LogArea = gsub("-Inf", NA, gsl$LogArea)
+NonGSL$LogArea = gsub("-Inf", NA, NonGSL$LogArea)
+# And make LogArea numeric again
+gsl = gsl %>% mutate(LogArea = as.numeric(LogArea))
+NonGSL = NonGSL %>% mutate(LogArea = as.numeric(LogArea))
 
-gsls = gsls %>% group_by(GSL,Genotype, Treatment, ZT, BioRep) %>% 
-  mutate(BioAvg_GSL = mean(PeakArea)) %>% ungroup()
-
-## Log transform the peak areas
-NonGSL$LogArea_RA = log(NonGSL$RA)
-NonGSL$LogArea_Sulfo = log(NonGSL$SQ)
-NonGSL$LogArea_Sucrose = log(NonGSL$Sucrose)
-
-gsls$LogArea_GSL = log(gsls$PeakArea)
-
-## Add an average column that averages over the tech reps to create one point per biorep
-NonGSL = NonGSL %>% group_by(Genotype, Treatment, ZT, BioRep) %>% 
-  mutate(BioAvg_RA = mean(RA), 
-         BioAvg_Sulfo = mean(SQ)) %>% ungroup()
-
-## Add an average column that averages over the tech reps to create one point per biorep
-gsls = gsls %>% group_by(GSL,Genotype, Treatment, ZT, BioRep) %>% 
-  mutate(BioAvg_GSL = mean(PeakArea), 
-         Log_BioAvg_GSL = log(BioAvg_GSL)) %>% ungroup()
-
-NonGSL = NonGSL %>% group_by(Genotype, Treatment, ZT, BioRep) %>% 
-  mutate(BioAvg_RA = mean(RA), 
-         BioAvg_Sulfo = mean(SQ),
-         BioAvg_Sucrose = mean(Sucrose), 
-         Log_BioAvg_Sulfo = log(BioAvg_Sulfo), 
-         Log_BioAvg_RA = log(BioAvg_RA), 
-         Log_BioAvg_Sucrose = log(BioAvg_Sucrose)) %>% ungroup()
+# Add a class column
+levels(factor(gsl$GSL))
 
 
-# Remove PeakArea and pull unique rows only to keep one point per biorep in the plots
-gsls = gsls %>% select(!PeakArea) %>% unique()
-  # Remove LogArea GSL to have one datapoint per plant per GSL
-gsls = gsls %>% select(!LogArea_GSL) %>% unique()
+gsl = gsl %>% mutate(Class = case_when(GSL == "4ME (Sm)" ~ "Indolic", 
+                               GSL == "4OH" ~ "Indolic",
+                               GSL == "NAP" ~ "Aliphatic",
+                               GSL == "PRO" ~ "Aliphatic",
+                               GSL == "SIN" ~ "Aliphatic",
+                               GSL == "NAS" ~ "Aromatic", 
+                               GSL == "GJV" ~ "Aliphatic",
+                             TRUE ~ NA))
 
-## Plot all to inspect cool patterns
-gsls_List = split(gsls, gsls$GSL)
+## Remove datapoints that fell below the limit of detection (Supp fig X)
+gsl = gsl %>% filter(LogArea > 13.3)
+NonGSL = NonGSL %>% filter(LogArea > 13.3)
 
-# GJV and IBE are under our threshold of what we are confident in; skip
-Fig7b_List = gsls_List[-c(3:4)]
+## Calculate the average of the technical reps to create one datapoint per biological rep
+gsl = gsl %>% group_by(Genotype, Treatment, ZT, GSL, BioRep) %>%
+  mutate(BioRepAvg = mean(LogArea, na.rm = TRUE)) %>% ungroup()
 
-# We also do not feel confident about NAP, NAS, or PRO, SIN levels for St so we remove these as well
-names(Fig7b_List)
+NonGSL =  NonGSL %>% group_by(Genotype, Treatment, ZT, NonGSL, BioRep) %>%
+  mutate(BioRepAvg = mean(LogArea, na.rm = TRUE)) %>% ungroup()
 
-# Since the two accessions have different GSLs name them individually and plot
-Fig7b_List_St = Fig7b_List[-c(3:6)]
-Fig7b_List_St = lapply(Fig7b_List_St, function(x) {x = x %>% filter(Genotype == "St"); x})
-Fig7b_List_Mu = lapply(Fig7b_List, function(x) {x = x %>% filter(Genotype == "Mu"); x})
+# Pull unique to avoid plotting the same biological rep multiple times
+BioReps = gsl[, -c(5, 8, 9)]
+BioReps = unique(BioReps) # lose 824 rows
 
-pdf(file.path(FigPath, file = "Figure7b.pdf"))
-for(i in 1:length(Fig7b_List_St)){
-  print(Fig7b_List_St[[i]] %>% 
-          filter(Log_BioAvg_GSL != "-Inf") %>%
-          ggplot(aes(x = factor(ZT, levels = c("4", "12", "20")), 
-                     y = Log_BioAvg_GSL, color = Treatment, fill = Treatment)) +
+GSL_List = split(BioReps, BioReps$GSL)
+
+pdf("Submission2_Fig7V2_GSL_Derivatives.pdf",width = 3.5,height = 3)
+for(i in 1:length(GSL_List)){
+  print(GSL_List[[i]] %>% 
+          filter(Genotype == "Mu" & BioRepAvg != 0) %>%
+          ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
           geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
-          geom_point(aes(group = Treatment), position=position_dodge(.73)) +
-          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          geom_point(position=position_dodge(.73)) +
           scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
           theme_bw() +
-          xlab("") +
-          ylab("Peak Area (log)") +
-          theme(legend.position = "bottom") +
-          ggtitle(paste("St:", names(Fig7b_List_St[i]))))
-}
-for(i in 1:length(Fig7b_List_Mu)){
-  print(Fig7b_List_Mu[[i]] %>% 
-          filter(Log_BioAvg_GSL != "-Inf") %>%
-          ggplot(aes(x = factor(ZT, levels = c("4", "12", "20")), 
-                     y = Log_BioAvg_GSL, color = Treatment, fill = Treatment)) +
+          theme(legend.position = "bottom", legend.title = element_blank()) +
+          xlab("ZT (hours after lights on)") +
+          ylab("Log2 Peak Area") +
+          ggtitle(paste("Mu:"), names(GSL_List[i])))
+  
+  print(GSL_List[[i]] %>% 
+          filter(Genotype == "St"& BioRepAvg != 0) %>%
+          ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
           geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
-          geom_point(aes(group = Treatment), position=position_dodge(.73)) +
-          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          geom_point(position=position_dodge(.73)) +
           scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
           theme_bw() +
-          xlab("") +
-          ylab("Peak Area (log)") +
-          theme(legend.position = "bottom") +
-          ggtitle(paste("Mu:", names(Fig7b_List_Mu[i]))))
+          theme(legend.position = "bottom", legend.title = element_blank()) +
+          xlab("ZT (hours after lights on)") +
+          ylab("Log2 Peak Area") +
+          ggtitle(paste("St:"), names(GSL_List[i]))) 
 }
 dev.off()
 
-### Statistics
-st_4me_gsls = gsls %>% filter(Genotype == "St" & GSL == "4ME (Sm)" & Log_BioAvg_GSL != "-Inf")
-t.test(Log_BioAvg_GSL ~ Treatment, data = st_4me_gsls, subset = st_4me_gsls$ZT == 4)
 
-st_nas_gsls = gsls %>% filter(Genotype == "St" & GSL == "NAS" & Log_BioAvg_GSL != "-Inf")
-t.test(Log_BioAvg_GSL ~ Treatment, data = st_nas_gsls, subset = st_nas_gsls$ZT == 4)
+## Plot SQ 
+NonGSL %>% filter(NonGSL == "SQ") %>% 
+  ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
+  geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+  geom_point(position=position_dodge(.73)) +
+  scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Log2 Peak Area") +
+  facet_wrap(~Genotype)
 
-mu_4me_gsls = gsls %>% filter(Genotype == "Mu" & GSL == "4ME (Sm)" & Log_BioAvg_GSL != "-Inf")
-t.test(Log_BioAvg_GSL ~ Treatment, data = mu_4me_gsls, subset = mu_4me_gsls$ZT == 4)
 
-mu_nas_gsls = gsls %>% filter(Genotype == "Mu" & GSL == "NAS" & Log_BioAvg_GSL != "-Inf")
-t.test(Log_BioAvg_GSL ~ Treatment, data = mu_nas_gsls, subset = mu_nas_gsls$ZT == 4)
+## Calculate the sum of each class across biological replicates
+ClassGSLs = BioReps %>% group_by(Genotype, Treatment, ZT, BioRep, Class) %>% 
+  mutate(ClassSum = sum(BioRepAvg, na.rm = TRUE)) %>% ungroup()
 
-mu_pro_gsls = gsls %>% filter(Genotype == "Mu" & GSL == "PRO" & Log_BioAvg_GSL != "-Inf")
-t.test(Log_BioAvg_GSL ~ Treatment, data = mu_pro_gsls, subset = mu_pro_gsls$ZT == 4)
+### Plot total GSLs
+# Save as pdfs
+ClassList = split(ClassGSLs, ClassGSLs$Class)
+
+pdf("Submission2_Fig7V4_TotalGSLs.pdf",width = 6,height = 3)
+for(i in 1:length(ClassList)){
+  print(ClassList[[i]] %>% 
+  filter(Genotype == "Mu"& ClassSum >0) %>%
+    ggplot(aes(x = factor(ZT), y = ClassSum, fill = factor(Treatment), color = Treatment)) +
+    geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+    geom_point(position=position_dodge(.73)) +
+    scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+    scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_grid(~Class) +
+  force_panelsizes(respect = TRUE) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Sum Log2 Peak Area") +
+  ggtitle(paste("Mu:"), names(ClassList[i])))
+
+print(ClassList[[i]] %>% 
+  filter(Genotype == "St" & ClassSum >0) %>%
+    ggplot(aes(x = factor(ZT), y = ClassSum, fill = factor(Treatment), color = Treatment)) +
+    geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+    geom_point(position=position_dodge(.73)) +
+    scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+    scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_grid(~Class) +
+  force_panelsizes(respect = TRUE) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Sum Log2 Peak Area") +
+  ggtitle(paste("St:"), names(ClassList[i]))) 
+}
+dev.off()
+```
+
+```{r Stats for Figure 7}
+## Total GSLs by Class
+st_aliphatic = gsl %>% filter(Genotype == "St" & Class == "Aliphatic")
+aov1 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_aliphatic)
+summary(aov1)
+TukeyHSD(aov1)
+
+mu_aliphatic = gsl %>% filter(Genotype == "Mu" & Class == "Aliphatic")
+aov2 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_aliphatic)
+summary(aov2)
+#TukeyHSD(aov2)
+
+
+# Indolic
+st_indolic = gsl %>% filter(Genotype == "St" & Class == "Indolic")
+aov3 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_indolic)
+summary(aov3)
+
+mu_indolic = gsl %>% filter(Genotype == "Mu" & Class == "Indolic")
+aov4 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_indolic)
+summary(aov4)
+
+
+## Figure 7 derivatives
+# 4OH
+st_4oh = gsl %>% filter(Genotype == "St" & GSL == "4OH")
+aov5 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_4oh)
+summary(aov5)
+TukeyHSD(aov5)
+
+mu_4oh = gsl %>% filter(Genotype == "Mu" & GSL == "4OH")
+aov6 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_4oh)
+summary(aov6)
+TukeyHSD(aov6)
+
+st_4me = gsl %>% filter(Genotype == "St" & GSL == "4ME (Sm)")
+aov7 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_4me)
+summary(aov7)
+TukeyHSD(aov7)
+
+mu_4me = gsl %>% filter(Genotype == "Mu" & GSL == "4ME (Sm)")
+aov8 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_4me)
+summary(aov8)
+TukeyHSD(aov8)
+
+
+##### 
+## Supplemental Figure stats
+st_nap = gsl %>% filter(Genotype == "St" & GSL == "NAP")
+aov9 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_nap)
+summary(aov9)
+TukeyHSD(aov9)
+
+mu_nap = gsl %>% filter(Genotype == "Mu" & GSL == "NAP")
+aov10 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_nap)
+summary(aov10)
+TukeyHSD(aov10)
+
+st_pro = gsl %>% filter(Genotype == "St" & GSL == "PRO")
+aov11 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_pro)
+summary(aov11)
+TukeyHSD(aov11)
+
+mu_pro = gsl %>% filter(Genotype == "Mu" & GSL == "PRO")
+aov12 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_pro)
+summary(aov12)
+TukeyHSD(aov12)
+
+st_nas = gsl %>% filter(Genotype == "St" & GSL == "NAS")
+aov13 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_nas)
+summary(aov13)
+TukeyHSD(aov13)
+
+mu_nas = gsl %>% filter(Genotype == "Mu" & GSL == "NAS")
+aov14 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_nas)
+summary(aov14)
+TukeyHSD(aov14)
+
+
+### SQ
+st_sq = NonGSL %>% filter(Genotype == "St" & NonGSL == "SQ")
+aov14 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_sq)
+summary(aov14)
+TukeyHSD(aov14)
+
+mu_sq = NonGSL %>% filter(Genotype == "Mu" & NonGSL == "SQ")
+aov15 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_sq)
+summary(aov15)
+TukeyHSD(aov15)
 ```
 
 
