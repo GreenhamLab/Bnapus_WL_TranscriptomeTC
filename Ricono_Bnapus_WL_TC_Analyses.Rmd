@@ -1,0 +1,2497 @@
+---
+title: "2024_Bnapus_WL_TC_Markdown"
+author: "Angie Ricono"
+date: '2024-05-29'
+output: html_document
+---
+
+Turn off warnings and messages
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE, quietly = TRUE) 
+```
+
+Set up the environment; start by installing necessary packages. Remove the 'suppressPackageStartupMessages' call if you would prefer to see installation messages and warmings. 
+```{r Install packages if needed; echo = FALSE; message = FALSE, warning=FALSE; quietly = TRUE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+
+suppressPackageStartupMessages({
+# These may be difficult to bring in if you haven't before 
+BiocManager::install("edgeR")
+BiocManager::install("DESeq2")
+
+install.packages("readxl")
+install.packages("readr")
+install.packages(("openxlsx"))
+install.packages("data.table")
+install.packages("tidyverse")
+install.packages("WGCNA")
+install.packages("pheatmap")
+install.packages("DiPALM")
+install.packages("ggrepel")
+install.packages("cowplot")
+install.packages("pals")
+install.packages("zoo")
+})
+```
+
+Load the packages
+```{r Load packages and set up the environment; message = FALSE; warning = FALSE}
+suppressMessages({
+require(DESeq2)
+require(pals)
+require(readxl)
+require(openxlsx)
+require(readr)
+require(data.table) 
+require(tidyverse)
+require(WGCNA)       # If you get the error "package or namespace load failed" specifically with references to 'GO.db use BiocManager::install("GO.db") and then try reinstalling WGCNA
+require(pheatmap)
+require(edgeR)
+require(DiPALM)
+require(ggrepel)
+require(zoo)
+require(ggh4x)
+})
+```
+First, create the following directories:
+- 'Bnapus_WL_TC' (the main directory that will house the subsequent folders)
+
+Within this main directory create the following folders:
+- 'R_output' (Files you will create in this Markdown will be stored here)
+- 'Figures' (Figures you will create in this Markdown will be stored here)
+- 'R_input' (Files you will download from our Github page)
+**If you choose to run multiple accessions through you should create an additional folder ("RawData") to house the SRA files from the NCBI GEO database (GSE261928).**
+
+
+There are a few files that we provide on our Github page (https://github.com/GreenhamLab/Bnapus_WL_TranscriptomeTC) that will need to be downloaded before starting. 
+
+You will need to download the following files from DRUM (https://hdl.handle.net/11299/264077) and save them in the 'R_input' folder you just created:
+- Bnapus_FeatCount.csv
+- NAP_GO_BP_Annotations.txt
+- GO_Term_Descriptions
+- OneToOne.csv
+- snp_pcaDat.csv
+- SugarResponsiveGenes.csv
+- Bnapus_ChlAssay_Data.xlsx
+- Ricono_BnapusWL_Metadata.xlsx
+- LicorData_ForR.xlsx
+- MetabolomicsData.xlsx
+- OverlapCandidates2.xlsx
+- Bnapus_WL_Rfunctions.R
+- Bnapus.eigenval
+- Bra_Bol_AGItair.csv
+- Final_OverlapWLgenes.csv
+- Final_AllModsOverEnrich_BroadDescript.xlsx
+- AllSulfurTerms_ATGs.xlsx
+
+These R objects were saved collectively as "RData_BnapusWL.RData". You will see this on the DRUM repository as well. 
+When you load this object you should see these files populate:
+- Yu_DiPALMClusters.RData
+- AllGenos_AvgExprs_DF.RData
+- AllGenos_MasterDF.RData
+- AllGenos_pValueskME.RData
+- AllGenos_pValuesMed.RData
+- AllGenos_SingleTP_pValues.RData
+- At_kMEAndkMed_FinalTable.RData
+- Av_NormCounts.RData
+- Mu_DiPALMClusters.RData
+- St_DiPALMClusters.RData
+- StandardResponseScore_BlockMods.RData
+
+First make sure you're working directory is pointed to the 'Bnapus_WL_TC' folder. For the rest of this markdown we provide chunks that are 'standalone' but comment out the files that are needed to make them stand alone. This is to provide ease for those that want to load the compiled RData object and click through the chunks (perhaps to recreate the figures) but also for those that would like to work on developing a single chunk and don't want to have to load everything at once to do so. Because of this it is important to run this chunk in the markdown chunk itself as well as in the console.
+```{r Set directory and create paths; message = FALSE; warning = FALSE}
+# It might be helpful to run the next set of paths in the console as well as in this chunk 
+setwd("~/Desktop/Git/Bnapus_WL_TC")
+  #create some paths to save 
+RawPath = "RawCounts"
+inPath = "R_input"
+outPath = "R_output"
+FigPath = "Figures"
+```
+
+Load the compiled RData object now. This may take a few minutes
+```{r}
+### COMMENTING OUT UNTIL A FINAL RUN HAS THE GREEN LIGHT THEN WILL COMPILE ###
+load(file.path(inPath, file = "RData_BnapusWL.RData"))
+```
+
+Because we have multiple accessions we will have to process them separately. The first half of this pipeline uses a single accession as an example (Av). Parts of some chunks will have to be changed to reflect the accessions ID if you decide to run multiple accessions through yourself. These areas are flagged with "ACCESSION SPECIFIC". The latter half of the pipeline uses data compiled from all accessions; in those cases we provide all of the necessary RData objects and often show the code we used to create these objects. 
+
+
+## Normalizing raw counts 
+The feature count tables are available as SRA's on GEO's database (GSE261928). Again, if you choose to run a different accession or all accessions the script below you will need to download each SRA into an accession specific folder in the 'RawPath' folder. 
+
+You can use the script below to compile all feature count files into a single dataframe but you will have to set up individual folders for each accession. For ease we provide the already normalized counts as an RData object ("Av_NormCounts.RData" which is 'NormCounts' in the R environment) but provide the code for those that want to run through the other accessions. 
+
+This is the code to bring in all feature counts for each of Av's samples, where a sample is feature count data for each biological replicate.
+```{r Normalizing raw counts; message = FALSE; warning = FALSE}
+# Create a vector that contains the name of files to loop over
+#filenames <- list.files(path = "RawPath/Av", pattern="*.txt")
+
+#make sure filenames look correct and you have the right number
+  #4tps*3reps*2treatments = 24
+#print(filenames)
+
+#compile all files into a list with one element for each file
+#napus = lapply(filenames, function(i) {
+#  read.table(paste0(RawPath, "/", i), header = TRUE) 
+#})
+#names(napus) = filenames
+
+
+#initialize some empty vectors to fill in
+#NormCounts = ""
+#cnts = ""
+## ADD ROWNAMES FROM GENE ID ####
+#for (i in 1:length(napus)) {
+#  print(i)
+#  rownames(napus[[i]]) = napus[[i]]$Geneid
+#  geneLen = setNames(abs(napus[[i]]$Length), nm = napus[[i]]$Geneid)
+#  cnts[[i]] = napus[[i]][7]
+#  cnts = do.call(cbind, cnts)
+#  cntsDge<- DGEList(counts = cnts)
+#  cntsDge<- calcNormFactors(cntsDge)
+#  NormCounts<- rpkm(cntsDge, log=T, gene.length = geneLen, prior.count=0)
+#}
+
+# Save the normalized counts to an appropriate location
+  ##### ACCESSION SPECIFIC #####
+#save(NormCounts, file = file.path(outPath, "Av_NormCounts.RData"))
+
+# Rename the columns to match the sample file names
+#colnames(cnts) = gsub("bam.", "", colnames(cnts))
+#colnames(cnts) = gsub(".bam", "", colnames(cnts))
+#colnames(cnts) = gsub("\\.", "-", colnames(cnts))
+
+# Bring in the rownames as genes
+#cnts = rownames_to_column(cnts, var = "Gene")
+
+# Save the count tables as an excel
+    ##### CHANGE FILENAME BASED ON GENOTYPE #####
+#write.table(cnts, file.path(RawPath, file = "Av_CountTable.txt"), row.names = FALSE)
+```
+As you run through chunks you will see annotated checkpoints throughout. These are in place to make sure that numbers add up correctly, columns are in the proper order, etc. We highly recommend that you carefully read through these. For example, in this example accession ("Av") you will see in the above that we are expecting to import 24 feature count tables, but only have 23. It will be dealt with in subsequent sections, but we note it here so you can flag other accessions with similar issues. 
+
+For the rest of this markdown we provide chunks that are 'standalone' but comment out the files that are needed to make them stand alone. This is to provide ease for those that want to load the compiled RData object and click through the chunks (perhaps to recreate the figures) but also for those that would like to work on developing a single chunk and don't want to have to load everything at once to do so.
+
+Load and clean the already normalized counts for our example accession. 
+```{r Data cleaning; message = FALSE; warning = FALSE}
+#load(file.path(inPath, file = "Av_NormCounts.RData"))
+
+## Fix the column names
+DF = data.frame(NormCounts)
+colnms<-colnames(data.frame(NormCounts))
+
+# remove the bam. and .bam 
+colnms<-gsub("bam.","",colnms)
+colnms<-gsub(".bam","",colnms)
+  # 20 and 100 is the percent of water the plant received; 20 = water limited and 100 = well watered
+colnms<-gsub("20","WL",colnms)
+colnms<-gsub("100","WW",colnms)
+  # clean up the replicate IDs
+colnms<-gsub("WL.1","WL_R1",colnms)
+colnms<-gsub("WL.2","WL_R2",colnms)
+colnms<-gsub("WL.3","WL_R3",colnms)
+colnms<-gsub("WW.1","WW_R1",colnms)
+colnms<-gsub("WW.2","WW_R2",colnms)
+colnms<-gsub("WW.3","WW_R3",colnms)
+  # remove ZT descriptor so it becomes numeric downstream
+colnms<-gsub("ZT","",colnms)
+
+##### ACCESSION SPECIFIC #####
+colnms<-gsub("Av1.30","Av",colnms)
+ ##### ##### ##### ##### #####
+
+# set cleaned column names to previous df
+colnames(DF) = colnms
+
+# It appears that there is a "gene:" prefix to the oleracea annotations; remove
+rownames(DF) = gsub("gene:", "", rownames(DF))
+
+# make a matrix; the number of elements should match the number of elements present in NormCounts
+CleanGenes = as.matrix(DF)
+```
+
+Filter out non-expressed genes. 
+We require at least one sample (where a sample is a full time course for a single plant) to have mean FPKM greater than zero.
+```{r Initial filtering; message = FALSE, echo= FALSE, include = FALSE, results='hide',fig.show='hide'}
+# Plot to determine a cutoff
+geneMeans<-apply(CleanGenes,1,function(x) mean(x,na.rm = T))
+hist(geneMeans,col="skyblue", breaks = seq(-12,16,0.25), main = "GeneMeans")
+abline(v=0,col="red",lwd=3,lty=2)
+
+## Remove genes that do not have at least one sample with mean log2 FPKM >0
+FilteredGenes<-CleanGenes[which(geneMeans>0),]
+  # Plot again to make sure retaining genes with mean >0
+geneMeans<-apply(FilteredGenes,1,function(x) mean(x,))
+hist(geneMeans,col="skyblue", breaks = seq(-12,16,0.25), main = "FPKM >0")
+abline(v=0,col="red",lwd=3,lty=2)
+
+# Replace NaNs resulting from taking the log of 0 (when normalizing counts)
+ProcessedGenes = FilteredGenes
+minVal<-min(FilteredGenes[!is.na(FilteredGenes)])-1
+ProcessedGenes[is.na(ProcessedGenes)]<-minVal
+  # Double check
+which(is.na(FilteredGenes))
+which(is.na(ProcessedGenes))
+
+# Final plot to double check; depending on the number of NaNs you start with you may see a small tail below zero
+geneMeans<-apply(ProcessedGenes,1,function(x) mean(x,na.rm = T))
+hist(geneMeans,col="skyblue", breaks = seq(-12,16,0.25), main = "Processed Genes")
+abline(v=0,col="red",lwd=3,lty=2)
+```
+
+We save Processed genes to maintain a clean copy with normalized expression and genes with no variation removed. 
+```{r Processed genes}
+# Pull out the Genes into a new column 
+#ProcessedGenes = rownames_to_column(data.frame(ProcessedGenes), var = "Gene")
+
+##### ACCESSION SPECIFIC #####
+# Save
+#write.table(ProcessedGenes, file.path(outPath, file = "Av_ProcessedGenes.txt"), row.names = FALSE)
+##### ##### ##### ##### #####
+```
+
+Impute missing samples if necessary. We use the median expression of the remaining replicates to fill in any missing time points. This step is required for WGCNA.
+```{r Impute if necessary; message = FALSE; warning = FALSE}
+# Save the current object to a new name to maintain the column names for the next chunks
+ImputedGenes = data.frame(ProcessedGenes)
+
+
+##### ACCESSION SPECIFIC #####
+ImputedGenes$Av_19_WW_R3 = ImputedGenes %>%
+  select(Av_19_WW_R1, Av_19_WW_R2) %>%
+  apply(1, median)
+ ##### ##### ##### ##### #####
+
+ImputedGenes = as.matrix(ImputedGenes)
+```
+
+Remove genes with no variation in expression. If you did not have to impute missing samples, set tmp equal to ProcessedGenes.
+
+First separate data into Time Courses by treatment and replicate.
+```{r Second filtering, message = FALSE, warning = FALSE}
+# If you do not need to impute missing samples run this line
+#ImputedGenes = ProcessedGenes
+tmp = ImputedGenes
+
+# Split the names by a separator
+spNms<-strsplit(x = colnames(tmp), split = "_")
+# Take the full names (Geno_Zt_Treat_Rep) and collapse them to Treatment.R1
+tnms<-sapply(spNms,function(x) paste(x[c(3,4)],collapse = "_"))
+# Separate by sample type
+  ### MAKE SURE THIS TABLE HAS EXPRESSIOIN DATA AND NOT TRUE/FALSE ###
+FilteredTCs<-tapply(1:length(tnms),INDEX = tnms, function(x) tmp[,x])
+
+# Find what genes = TRUE for var > 0
+varFiltered<-lapply(FilteredTCs,function(x) apply(x,1,function(y) var(y)>0))
+# Bind into a matrix of TRUE instances (for above) by sample type
+varFiltered<-do.call(cbind,varFiltered)
+# Take logical data and find which vectors have all TRUEs
+varFiltered<-apply(varFiltered,1,function(x) all(x))
+# Add gene names back
+varFiltered<-names(varFiltered)[which(varFiltered)]
+# Apply the above list to the previous data (seperated by TC; all tps for each replicate by treatment)
+TCs<-lapply(FilteredTCs,function(x) x[varFiltered,])
+
+## Reorder by Zt (here y = 2; or the second piece of the colname)
+  # downstream will need both a list with elements as TCs (colnames as timepoint)
+TCs_List<-lapply(TCs,function(x) x[,order(as.numeric(sapply(strsplit(colnames(x),split = "_"),function(y) y[2])))])
+
+
+#### FROM HERE ON OUT COLUMNS MUST BE IN ORDER #####
+  #Each element should be an entire time course, with elements separated into replicates (length = #Reps*#Treatments) 
+sapply(TCs_List,colnames)
+
+# Remove any annotation (ie ENSRNA genes) that are not Bra or Bo
+TCs_List = lapply(TCs_List, function(x) x[which(str_detect(rownames(x), "Bra|Bo")== TRUE),])
+
+# Compile into a large matrix. columns are time points and rows are Geno_Treat_Gene
+TCs_Mat<-do.call(rbind,TCs_List)
+head(TCs_Mat)
+tail(TCs_Mat)
+
+##### CHANGE TO MATCH GENOTYPE ##### 
+save(TCs_List, file = file.path(outPath, file = "Av_TCs_List.RData"))
+save(TCs_Mat, file = file.path(outPath, file = "Av_TCs_Mat.RData"))
+##### ##### ##### ##### ##### #####
+```
+
+Clean up your global environment.
+```{r}
+rm(CleanGenes, FilteredGenes, ImputedGenes, NormCounts, ProcessedGenes, spNms, tmp, geneMeans, colnms, minVal, tnms, varFiltered, FilteredTCs, TCs)
+```
+
+Later on we will use average expression for certain analyses. Make this now and save locally. 
+
+Here we make a temporary list with #elements equal to #time points and then average expression within each element. Although we did this earlier the data wasn't ordered yet so we repeat the same process here, and then combine the averages into a single df.
+```{r Create dataframe with averaged expression; message = FALSE; warning = FALSE}
+tmp = do.call(cbind, TCs_List)
+
+# split the names by a separator
+spNms<-strsplit(x = colnames(tmp), split = "_")
+spNms
+# take the full names (Geno_ZT_Treat_Rep) and collapse them to Treatment_ZT
+tnms<-sapply(spNms,function(x) paste(x[c(3,2)],collapse = "_"))
+tnms
+### MAKE SURE THIS TABLE HAS EXPRESSION DATA AND NOT TRUE/FALSE ###
+tmpTCs<-tapply(1:length(tnms),INDEX = tnms, function(x) tmp[,x])
+  # We comment these out here to avoid excess messages in the markdown but suggest that you uncomment them for your own analyses
+#head(tmpTCs[[1]])
+#head(tmpTCs[[8]])
+
+# Calculate the average
+Avg_TCs = lapply(tmpTCs, function(x) apply(x, 1, mean))
+
+# Make a df for downstream analyses
+  # Note that the elements will now be out of order; rearrange the elements by ZT
+  #names(Avg_TCs)
+AvgExprs <-data.frame(WL_1 = Avg_TCs[[1]],WL_7 = Avg_TCs[[4]], WL_13 = Avg_TCs[[2]], WL_19 = Avg_TCs[[3]], 
+                  WW_1 = Avg_TCs[[5]], WW_7 = Avg_TCs[[8]], WW_13 = Avg_TCs[[6]], WW_19 = Avg_TCs[[7]])
+
+
+##### ACCESSION SPECIFIC #####
+save(Avg_TCs, file = file.path(outPath, file = "Av_Avg_TCs.RData"))
+save(AvgExprs, file = file.path(outPath, file = "Av_AvgExprs.RData"))
+##### ##### ##### ##### ##### #####
+```
+
+At this point it's always a good idea to look at the data to find potential outliers and to plot known genes to validate expression patterns. While we do that as part of our analyses we do not provide the code here.
+
+## DiPALM
+We now move on to constructing a co-expression network to identify eigengenes or our representative patterns in the dataset. Before constructing the network, it's a good idea to estimate some of the key parameters (soft thresholding power; mean connectivity) used by WGCNA. This is time consuming to run so we provide the code here but will skip this chunk and note that we used a soft threshholding power of 18. 
+```{r Estimate WGCNA parameters; message = FALSE; warning = FALSE}
+# Allow parallel processing for multiple cores
+#allowWGCNAThreads(4)
+# Choose a set of soft-thresholding powers
+#powers = c(c(1:10), seq(from = 12, to=20, by=2))
+#cex1 = 0.9
+
+# Rows correspond to samples and columns to genes
+#threshold = pickSoftThreshold(t(DF), powerVector = powers, verbose = 5)
+
+#Plot to select parameters
+#plot(threshold$fitIndices[,1],
+#     -sign(threshold$fitIndices[,3])*threshold$fitIndices[,2],
+#     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+#     main = paste("Scale independence"));
+#text(threshold$fitIndices[,1],
+#     -sign(threshold$fitIndices[,3])*threshold$fitIndices[,2],
+#     labels=powers,cex=cex1,col="red")
+#abline(h=0.90,col="red")
+
+# Mean connectivity as a function of the soft-thresholding power 
+#plot(threshold$fitIndices[,1], threshold$fitIndices[,5],
+#     xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+#     main = paste("Mean connectivity"))
+#text(threshold$fitIndices[,1], threshold$fitIndices[,5], labels=powers, cex=cex1,col="red")
+```
+
+You can now construct the network. We provide annotated code below to run the network locally but since it is very computationally intensive you will likely need to run it on something like a high performance super computer and bring the saved (RData) network in. 
+```{r Construct Co-expression Networks}
+#BlockModsAll <- blockwiseModules(datExpr = t(TCs_Mat), power = 18, networkType = "signed", corType="bicor", TOMType="signed", minModuleSize=100, mergeCutHeight=0.30, deepSplit=1, pamRespectsDendro = F, nThreads = 4, verbose=3)
+
+
+##### ACCESSION SPECIFIC #####
+#save(BlockMods, file.path(outPath, file="Av_BlockMods.RData"))
+```
+
+Visualize the network. We then plot the module eigengenes to inspect patterns. The filename for this object is "Av_BlockMods" to differentiate between the different runs by accession, but note that it is named 'BlockMods' in the environment to avoid have to rename multiple objects each time a new accession is brought in. 
+```{r Visualize eigengenes; message = FALSE; warning = FALSE}
+# Load the saved network
+#load(file.path(inPath, file = "Av_BlockMods.RData"))
+
+# Identify how many modules were detected
+  # Rename if comparing different networks
+dim(BlockMods[[3]])
+
+# Convert labels to colors for plotting to visualize the network
+mergedColors = labels2colors(BlockMods$colors)
+plotDendroAndColors(BlockMods$dendrograms[[1]], mergedColors[BlockMods$blockGenes[[1]]],
+                    "Module colors",
+                    dendroLabels = FALSE, hang = 0.03, addGuide = TRUE, guideHang = 0.05,main = "Module Relationships")
+
+
+## Extract the eigengenes
+MEs = BlockMods[[3]]
+# Add ZTs to plot
+MEs = rownames_to_column(MEs, var = "ZT")
+
+# Remove the characters and make a factor to reorder
+MEs$ZT = str_replace_all(MEs$ZT, c("Av_1_WL_R1" = "1", "Av_7_WL_R1" = "7", 
+                                   "Av_13_WL_R1" = "13", "Av_19_WL_R1" = "19"))
+
+MEs = MEs %>% mutate(ZT = factor(ZT, levels = c("1", "7", "13", "19")))
+
+# Lengthen to create a column to plot with
+plottingMEs = pivot_longer(MEs, cols = !ZT, names_to = "Modules", values_to = "Expression")
+
+## Plot the eigengene patterns
+plottingMEs %>%
+        ggplot(aes(x = as.numeric(ZT), y = Expression, fill = "black")) +
+        geom_line() +
+        facet_wrap(~Modules) +
+        xlab("Zt") +
+        ylab("Time series response") +
+        ggtitle("Co-expression Eigengene Patterns") +
+  theme_bw()
+
+## Critical - remove 'MEgrey'. This module holds genes that don't fit cut offs in any other given module
+MEs = MEs[, -11]
+```
+
+Calculate module membership of each gene to every eigengene. These scores will be used to identify significantly different expression patterns in the linear contrasts.
+
+**Critical: Because these tests are based on permutation analyses, each time you run them you will get slightly different results. We have designed this markdown (i.e. provided certain datasets) to avoid this issue but if you choose to run different accessions through you should be mindful of how you are saving the files and which files you pull from in later chunks**
+
+For the remainder of the markdown we will pre-flag critical chunks like these with *PERMUTATION SPECIFIC*
+```{r Calculate module membership; message = FALSE; warning = FALSE}
+# kME is the pattern change difference, and Med is the difference in median expression
+  # Remove the ZTs column that we added for plotting
+MEs = MEs[, -1]
+
+kMEsList<-BuildModMembership(MeMat = MEs, TCsLst = TCs_List)
+Med<-sapply(TCs_List,function(x) apply(x,1,function(y) median(y,na.rm = T)))
+
+# Permute non-merged dataset to estimate the null distribution
+Perm<-lapply(TCs_List,function(x) x[sample(1:nrow(x),nrow(x),replace = T),])
+# Calculate kME and kMed scores from permuted data
+kMEsPerm<-BuildModMembership(MeMat = MEs, TCsLst = Perm)
+MedPerm<-sapply(Perm,function(x) apply(x,1,function(y) median(y,na.rm = T)))
+```
+
+Construct linear contrasts.
+ *PERMUTATION SPECIFIC*
+```{r Perform linear contrasts; message = FALSE, echo = FALSE, include=FALSE}
+# Make sure the Treat vector matches the order of TC samples (replicates) 
+#head(kMEsList[[1]])
+
+Treat<-as.factor(c("WL","WL","WL", 
+                   "WW","WW","WW"))
+design<-model.matrix(~0+Treat)
+colnames(design)<-levels(Treat)
+contr<-"WL-WW"
+
+LimmaModskMEs<-lapply(kMEsList, function(x) BuildLimmaLM(dataMat = x, designMat = design, contrastStr = contr))
+LimmaModsMed<-BuildLimmaLM(dataMat = Med, designMat = design, contrastStr = contr)
+
+# Pull out t-scores; clear memory
+LimmaModskMEs<-do.call(cbind,lapply(LimmaModskMEs,function(x) x$t))
+LimmaModsMed<-LimmaModsMed$t
+gc()
+
+# Repeat limma tests on permuted data 
+LimmaModskMEsPerm<-lapply(kMEsPerm, function(x) BuildLimmaLM(dataMat = x, designMat = design, contrastStr = contr))
+LimmaModsMedPerm<-BuildLimmaLM(dataMat = MedPerm, designMat = design, contrastStr = contr)
+LimmaModskMEsPerm<-do.call(cbind,lapply(LimmaModskMEsPerm,function(x) x$t))
+LimmaModsMedPerm<-LimmaModsMedPerm$t
+gc()
+
+# Get the absolute value of the test stats (used to plot distributions, below)
+TestSumskMEs<-apply(LimmaModskMEs,1, function(x) sum(abs(x),na.rm = T))
+TestSumsMed<-abs(LimmaModsMed[,1])
+#repeat on permuted data
+PermSumskMEs<-apply(LimmaModskMEsPerm,1, function(x) sum(abs(x),na.rm = T))
+PermSumsMed<-abs(LimmaModsMedPerm[,1])
+```
+
+Pull out lists of responsive genes as called by DiPALM.
+*NOT PERMUTATION SPECIFIC but note that we have purposely commented out the save lines to avoid saving over previous versions of kMEs etc based on previous permutations*
+```{r Identifying significantly differentially patterned genes; message = FALSE; warning = FALSE}
+# Plot both patterns datasets to determine a cut off
+ggPlotMultiDensities(denslist = list(Test=TestSumskMEs,Permuted=PermSumskMEs), main = "Pattern Change Scores", xlab = "Differential Pattern Score",lwidth = 0, cols = c("chartreuse4", "darkgoldenrod1"))
+ggPlotMultiDensities(denslist = list(Test=TestSumsMed,Permuted=PermSumsMed), main = "Expression Change Scores", xlab = "Differential Expression Score",lwidth = 0, cols = c("chartreuse4", "darkgoldenrod1"))
+
+# Determine a significance cutoff: calculate a pValue using the individual values from each test sum and permuted test sum with an FDR correction.
+AdjkMEs<-sapply(TestSumskMEs,function(x) AdjustPvalue(tVal = x, tVec = TestSumskMEs, pVec = PermSumskMEs))
+AdjMed<-sapply(TestSumsMed,function(x) AdjustPvalue(tVal = x, tVec = TestSumsMed, pVec = PermSumsMed))
+
+# Pull out genes with p > 0.01
+SigkMEs<-AdjkMEs[which(AdjkMEs<0.01)]
+SigMed<-AdjMed[which(AdjMed<0.01)]
+  
+# Number of differently patterned genes
+length(SigkMEs)
+length(SigMed)
+
+# Save the list of significantly differentially patterned genes
+#save(SigkMEs, file = file.path(outPath, file = "Av_SigkMEs.RData"))
+#save(SigMed, file = file.path(outPath, file = "Av_SigMed.RData"))
+```
+
+SigkMEs/SigMed are the lists of differentially patterned/expressed genes for a single accession. kME refers to a pattern change and Med is a significantly different median expression level. From now on we will work with all accessions. To do this we ran each accession through this entire pipeline up to this point. We then compiled all expression data and lists of differentially patterned genes. 
+# End of DiPALM
+
+Before moving on, it is a good idea to remove any objects from your environment that were created for our single example accession to avoid confusion.
+```{r}
+rm(Avg_TCs, AvgExprs, design, kMEsPerm, LimmaModskMEsPerm, LimmaModsMedPerm, LimmaModskMEs, LimmaModsMed, MedPerm, Perm, plottingMEs, spNms, TCs_List, TCs_Mat, tmp, tmpTCs, AdjkMEs, AdjMed, contr, mergedColors, PermSumskMEs, PermSumsMed, SigkMEs, SigMed, TestSumskMEs, TestSumsMed, tnms, Treat, kMEsList, Med, MEs)
+```
+
+Below is the code to compile all expression data into a single nested list. To run this yourself you will have to run each accession through this pipeline up to this point and save the TCs_List objects in the R_output folder. You may add unique accession identifiers to the file names but *must* keep the end of the file name as: "TCs_List.RData" for the code to work.
+```{r Compiling expression data across accessions}
+#bring in all the TCs_Lists and add the file name to separate
+
+#all.files = list.files(outPath, pattern = "TCs_List.RData")
+#all.files
+
+#exprs <- lapply(all.files, function(x) get(load(file.path(outPath, file = x))))
+#names(exprs) <- all.files 
+
+# Save
+#save(exprs, file = file.path(outPath, file = "AllGenos_exprs_List.RData"))
+```
+
+Most of the subsequent plotting and some of the analyses will pull from a 'Master' dataframe that contains gene expression for every gene, replicate, treatment and time point. We also include average expression and standard deviation of gene expression over replicates as well as normalized expression (zscore) and SD. We have provided the code to do this below which takes ~40 minutes to complete locally (depending on your system). Similar to the 'Compiling expression data across accessions' r-chunk to do this yourself you will have to have run all accessions through the pipeline first.
+
+Here we provide the code to compile everything but you should load the 'MasterDF.RData' object if you haven't already and skip to the next chunk.
+```{r Create Master DF}
+# Pull in all DFs at once
+#exprsDF <- lapply(files, function(x) get(load(file.path("~/Desktop/Bnapus_drought/Bnapus_TranscriptomeAnalyses/ExpressedGenes/DFs/", file = x))))
+#names(exprsDF) <- files 
+
+# Note they all say drought in the rownames so get rid of that
+#exprsDF = lapply(exprsDF, function(x) rownames_to_column(x, var = "IDs"))
+#exprsDF = lapply(exprsDF, function(x) {x$IDs = gsub("Drought_", "", x$IDs); x})
+
+## Remove the Geno ID from colnames to be able to bind columns (names must match in all elements)
+#exprsDF = lapply(exprsDF, function(x) {colnames(x) = gsub("^[^_]*\\_", "", colnames(x));x})
+
+# Make a dataframe by binding rows
+#exprsDF = do.call(rbind, exprsDF)
+
+# Pivot to have each row be a gene for an individual sample (one time point, treatment, and accession)
+#exprsDF = exprsDF %>% pivot_longer(!(IDs), 
+                                   #names_to = "ZTs", values_to = "Expression")
+
+# Separate 'ZT' column into multiple columns
+#exprsDF = exprsDF %>% separate(ZTs, c("ZTs", "Treatment", "Rep"))
+#gc()
+
+# Split IDs to pull out geno and gene; keep IDs for an index
+#exprsDF = exprsDF %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+#gc()
+
+# Order the ZTs
+#MasterDF = exprsDF %>% mutate(ZTs = factor(ZTs, levels = c("1", "7", "13", "19")))
+
+## Add average, sd, and zscore (standardized) expression columns for plotting later
+#MasterDF = MasterDF %>% 
+    # Average just the replicate expression at each ZT
+  #group_by(Geno, Treatment, ZTs, Gene) %>%
+  #mutate(AvgExprs = mean(Expression), 
+         #sdExprs = sd(Expression)) %>%
+  #ungroup() %>% 
+    # Calculate Avg and sd over the whole TC by gene
+  #group_by(Geno, Treatment, Gene) %>% 
+  #mutate(TCavg = mean(Expression), 
+         #TCsd = sd(Expression)) %>%
+  #ungroup() %>%
+  # Now calculate the zScore to standardize gene level (not rep) expression
+  #mutate(zScore = (AvgExprs - TCavg)/TCsd)
+```
+
+Because of our need to impute, we are hesitant to rely on DiPALM calls when an accession was missing two replicates at a given time point. To overcome this we now perform differential expression analyses at single time points and will only include DiPALM calls for ZTs with two missing replicates IF these same genes were also significant in our single time point analyses. 
+
+Here is the code to run the single time point analyses, but this can be quite time consuming. We have provided the output of this analyses in the 'AllGenos_SingleTP_pValues.RData' object. We provide the list of significant single time point calls (sig_genes_napus; p <= 0.01) as well as the full list of genes with their associated pvalue (qval_napus) for those that would like to use their own cutoff. Note that the data used for the below chunk has the file name "AllGenos_exprs_List" but is simply named 'exprs' in the R environment. 
+```{r Single time point analyses}
+#load(file.path(inPath, file = "MasterDF.RData"))
+#load(file.path(inPath, file = "AllGenos_exprs_List.RData"))
+
+# Clean up the names in exprs to reflect just the genotype
+#names(exprs) = gsub("^\\._", "", names(exprs))
+
+# Results will end in these lists
+#qval_napus <- list()
+#sig_genes_napus <- list()
+
+# FDR cutoff
+#fdr <- 0.01
+
+#raw_exp = list()
+# Iterate through each genotype
+#for(geno in names(exprs)){
+  # Grab expression data and unify into a single dataframe
+  #  raw_exp = do.call(cbind, exprs[[geno]])
+
+  #qval_tps <- list()
+  # Iterate through each timepoint
+  #for(tp in c(1, 7, 13, 19)) {
+    
+    # Extract columns corresponding to the current timepoint
+    #tp_columns <- grep(paste0("_", tp, "_"), colnames(raw_exp))
+    #raw_tp <- as.matrix(raw_exp[, tp_columns])
+    # Resample values in each column for null distribution approximation
+    #perm_tp <- apply(raw_tp, 2, 
+     #                function(x) x[sample(1:length(x), length(x), replace = TRUE)])
+    #rownames(perm_tp) <- rownames(raw_tp)
+    
+    # Extract conditions from column names
+    #cond_vec <- grepl("WL", colnames(raw_tp))
+    #cond_vec[cond_vec] <- "WL"
+    #cond_vec[cond_vec == FALSE] <- "WW"
+    #cond_vec <- as.factor(cond_vec)
+    
+    # Set up linear model
+    #design <- model.matrix(~0 + cond_vec)
+    #colnames(design) <- levels(cond_vec)
+    #contrast_str <- "WL-WW"
+    
+    # Build linear models for test and null
+    #limma_model <- BuildLimmaLM(raw_tp, design, contrast_str)
+    #limma_model_perm <- BuildLimmaLM(perm_tp, design, contrast_str)
+    
+    # Extract t-scores from linear models
+    #tscores <- abs(limma_model$t[,1])
+    #tscores_perm <- abs(limma_model_perm$t[,1])
+    
+    # Calculate q-values
+    #qvals <- sapply(tscores, function(x) AdjustPvalue(x, tscores, tscores_perm))
+    #qval_tps[[as.character(tp)]] <- qvals
+  #}
+  
+  # Select genes at each time point that satisfy FDR threshold
+  #sig_tps <- lapply(qval_tps, function(x) (x[which(x < fdr)]))
+  # Take the union of significant genes at each timepoint to get list of genes
+  # significant in at least one timepoint 
+  #sig_consolidated <- Reduce(union, sig_tps, sig_tps)
+  
+  #qval_napus[[geno]] <- qval_tps
+    #note that sig_genes_napus might have overlaps between the tps (but not within)
+  #sig_genes_napus[[geno]] <- sig_tps
+  #}
+
+#gc()
+
+#save(qval_napus, sig_genes_napus, file = file.path(outPath, file = "AllGenos_SingleTP_pValues.RData"))
+```
+
+Before we can bring in overlapping calls from the single time point analyses we first bring in a compiled list of all unique DiPALM calls (kME; Med) for all accessions. To make this we simply concatenated the genes that were only kME with the unique list of genes that were only Med. We now merge those into a single table containing all DiPALM calls.
+```{r Compile DiPALM calls for all accessions, message = FALSE}
+#load(file.path(inPath, file = "pValueskMETable.RData"))
+#load(file.path(inPath, file = "pValuesMedTable.RData"))
+
+dipalmGenes = full_join(pValues_kMETable, pValues_MedTable)
+dipalmGenes = dipalmGenes %>% distinct(IDs)
+dipalmGenes = dipalmGenes %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+# There are some Axx genes; remove
+dipalmGenes = dipalmGenes[which(!grepl("Bra|Bo", dipalmGenes$Gene) == FALSE), ]
+
+# Save
+save(dipalmGenes, file = file.path(outPath, file = "All_dipalmGenes.RData"))
+```
+
+We now subset 'All_dipalmGenes' to only retain calls that were made by both DiPALM and the single time point analyses *only when* an accession lost two replicates at a single time point. We have three instances of this (See Metadata/DiPALM genes); first we create a unique list of single time point calls in a format similar to our dipalmGenes object.
+```{r Bring in single time point calls; message = FALSE}
+#load(file.path(inPath, file = "AllGenos_SingleTP_pValues.RData"))
+
+# Put the list elements into one dataframe
+singleTP_df = data.frame(IDs = names(unlist(sig_genes_napus)), singleTP_pValue = unlist(sig_genes_napus))
+  # Chop up the ID column to make some descriptors
+singleTP_df = singleTP_df %>% separate(IDs, c("Geno", "ZTs", "Gene"), extra = "merge")
+  # Remove the extra information in 'Gene'
+singleTP_df$Gene = gsub(".*?_", "", singleTP_df$Gene)
+  # Remake an IDs column to have a unique identifier
+singleTP_df = singleTP_df %>% unite("IDs", c("Geno", "Gene"), sep = "_", remove = FALSE)
+
+## Reformat qvalu_napus to match singleTP_df for the next chunk
+  # Bring in the pValue from qval_napus
+qval_df = data.frame(IDs = names(unlist(qval_napus)), singleTP_pValue = unlist(qval_napus))
+  # Chop up the ID column to make some descriptors; takes several minutes
+qval_df = qval_df %>% separate(IDs, c("Geno", "ZTs", "Gene"), extra = "merge")
+  # Remove the extra information in 'Gene'
+qval_df$Gene = gsub(".*?_", "", qval_df$Gene)
+  # Remake an IDs column to have a unique identifier
+qval_df = qval_df %>% unite("IDs", c("Geno", "Gene"), sep = "_", remove = FALSE)
+
+# Clean up your memory a bit
+gc()
+```
+
+We can now find the overlap between single timepoints (not including the imputed ZT) and dipalm calls for our three instances (Ab ZT7 WL; Ca ZT13 WL; St ZT7 WL) that an accession was missing more than one replicate to create our final list of WL genes. 
+
+Here we provide the kME and Med calls we used from DiPALM because every time you run through the DiPALM analysis and use permutation the calls will change slightly. We note this now for those that want to run other accessions through themselves; in this case you will have to save unique kME and Med calls and bring them in here. 
+```{r Incorporate single time point calls into a final set of WL genes; message = FALSE}
+#load("R_input/pValuesMedTable.RData")
+#load("R_input/pValueskMETable.RData")
+#load("R_input/AllGenos_SingleTP_pValues.RData")
+
+dipalmGenes = full_join(pValues_kMETable, pValues_MedTable)
+dipalmGenes = dipalmGenes %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+# Pull out Ab 
+Ab_dipalm = dipalmGenes %>% filter(Geno == "Ab")
+Ab_dipalm = unique(Ab_dipalm$Gene) # 9151
+
+# Put the singleTP calls into an easier format
+single = data.frame(Gene = names(unlist(sig_genes_napus)))
+single = single %>% separate(Gene, c("Delete", "ZT", "Geno", "Treatment", "Gene"))
+
+# Make another object of the other singleTPs that we trust because they were not imputed
+Ab_notImputed = single %>% filter(ZT != "7" & Geno == "Ab") %>% pull(Gene)
+Ab_notImputed = unique(Ab_notImputed) # 3703
+
+# Take the overlap between dipalm calls and the non-imputed single tp calls
+Ab_keep = intersect(Ab_dipalm, Ab_notImputed) # 2348
+
+## Repeat with Ca
+  # Pull out Ca 
+Ca_dipalm = dipalmGenes %>% filter(Geno == "Ca")
+Ca_dipalm = unique(Ca_dipalm$Gene) # 12862
+
+# Make another object of the other singleTPs that we trust because they were not imputed
+Ca_notImputed = single %>% filter(ZT != "13" & Geno == "Ca") %>% pull(Gene)
+Ca_notImputed = unique(Ca_notImputed) # 1491
+
+# Take the overlap between dipalm calls and the non-imputed single tp calls
+Ca_keep = intersect(Ca_dipalm, Ca_notImputed) # 933
+
+## Repeat with St
+  # Pull out St 
+St_dipalm = dipalmGenes %>% filter(Geno == "St")
+St_dipalm = unique(St_dipalm$Gene) # 20203
+
+# Make another object of the other singleTPs that we trust because they were not imputed
+St_notImputed = single %>% filter(ZT != "7" & Geno == "St") %>% pull(Gene)
+St_notImputed = unique(St_notImputed) # 11826
+
+# Take the overlap between dipalm calls and the non-imputed single tp calls
+St_keep = intersect(St_dipalm, St_notImputed) # 8857
+
+
+## Reformat to match the dipalmGenes format 
+Ab_keep = paste0("Ab_", Ab_keep)
+Ab_keep = data.frame(IDs = Ab_keep)
+Ab_keep = Ab_keep %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+Ca_keep = paste0("Ca_", Ca_keep)
+Ca_keep = data.frame(IDs = Ca_keep)
+Ca_keep = Ca_keep %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+St_keep = paste0("St_", St_keep)
+St_keep = data.frame(IDs = St_keep)
+St_keep = St_keep %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+## Remove the original dipalm calls for these three accessions and paste in the new calls
+Final_WLgenes = dipalmGenes %>% filter(Geno != "Ab" & Geno != "Ca" & Geno != "St") # 73054
+Final_WLgenes = Final_WLgenes[,-4]
+Final_WLgenes = rbind(Final_WLgenes, Ab_keep, Ca_keep, St_keep) # 85192
+sum(nrow(Ab_keep), nrow(Ca_keep), nrow(St_keep)) # 12138
+Final_WLgenes = unique(Final_WLgenes) # 81626
+
+# There are also a few ENSRNA genes; remove 
+Final_WLgenes = Final_WLgenes[which(str_detect(Final_WLgenes$IDs, "ENSRNA") == FALSE),]
+
+# Write out once more for a final check
+#write.csv(Final_WLgenes, file = file.path(outPath, "Final_WLgenes.csv"), row.names = FALSE)
+```
+
+Clean up the environment
+```{r}
+rm(BlockMods, dipalmGenes, Ab_keep, Ca_keep, single, St_keep, Ab_dipalm, Ab_notImputed, Ca_dipalm, Ca_notImputed, St_dipalm, St_notImputed)
+```
+
+Before proceeding with transcriptome analyses we first look to see if variation in relative growth among the accessions is likely due to similarity in genetic background. To do this we make a PCA with expression data and map on crop type information as color and relative difference in growth as size of the point.
+
+Supplemental Figure 5
+```{r Load Count data for Supp Fig5; message = FALSE}
+Bnapus_FeatCount <- read.csv(file.path(inPath, file = "Bnapus_FeatCount.csv"), row.names=1)
+eigenval <- scan(file.path(inPath, file = "/BNapus.eigenval"))
+
+## Making coldata object
+  # Read column names into dataframe for samples
+coldata<-as.data.frame(colnames(Bnapus_FeatCount))
+
+# Turn sample names into rownames of df
+rownames(coldata)<-coldata$`colnames(Bnapus_FeatCount)`
+# Split first column of sample names into genotype, timepoint, and treatment columns, last column includes both treatment and replicate
+coldata<- coldata %>% separate(col = `colnames(Bnapus_FeatCount)`, sep="_", into= c("genotype","timepoint","treatment"))
+# Split last column so both treatment and replicate are included
+coldata<- coldata %>% separate(col=treatment,into=c("treatment","rep"))
+
+coldata$genotype<-factor(coldata$genotype)
+coldata$timepoint<-factor(coldata$timepoint,levels=c("ZT1","ZT7","ZT13","ZT19"))
+coldata$treatment<-factor(coldata$treatment)
+coldata$rep<-factor(coldata$rep)
+
+#check count table and coldata are in same order 
+all(rownames(coldata) == colnames(Bnapus_FeatCount))
+
+## Make DESseq2 objects
+dds <- DESeqDataSetFromMatrix(countData = round(Bnapus_FeatCount),
+                              colData = coldata,
+                              design = ~ genotype+timepoint+treatment)
+
+# Normalize expression data
+vsd <- vst(dds,blind=F)
+
+# Set up to plot
+pcaData <- plotPCA(vsd, intgroup=c("genotype","timepoint"), returnData=TRUE)
+
+# Hard code the growth phenotypes based on running summary statistics previously
+pcaData = pcaData %>% 
+  mutate(phenotype = case_when(genotype == "Ab4.28" | genotype == "Ca4.32" | genotype == "Da2.44" | genotype == "DH12.6.33" | genotype == "DH20" | genotype == "Yu1.42" |genotype == "Ze2" ~ "Moderate", genotype == "Al1.29" | genotype == "Mu4.37" | genotype == "Ne3.38" | genotype == "Qu1.39" | genotype == "Se2.40" ~ "Insensitive", genotype == "Av1.30" | genotype == "Br2.31" | genotype == "Gr2.35" | genotype == "st1.45" ~ "Sensitive"))
+
+#convert to percentage variance explained
+pve <- data.frame(PC = 1:16, pve = eigenval/sum(eigenval)*100)
+```
+
+We also want to add crop type for each sample as part of our image analyses. For full details see the **Insert name of RMarkdown for image analyses** RMarkdown (lines ###). We did this in excel; load the 'snp_pcaDat.csv' file if you haven't already. 
+```{r, Supplemental Figure5; message = FALSE}
+pca = read.csv(file.path(inPath, file = "snp_pcaDat.csv"))
+
+pdf(file = "Figures/SupplementalFigure5.pdf")
+ggplot(pca, aes(PC1, PC2, col = croptype)) + 
+    geom_point(aes(size = phenotype)) +
+    scale_colour_manual(values=c("maroon", "darksalmon", "darkorchid4",  "lightsalmon4","steelblue4"), name = "Croptype") + coord_equal() +
+    xlab(paste0("PC1 (", signif(pve$pve[1], 3), "%)")) + 
+    ylab(paste0("PC2 (", signif(pve$pve[2], 3), "%)")) +
+    geom_label_repel(aes(label = ind), max.overlaps = 40, label.padding = .08, nudge_x = c(-0.5,.5, .2, .3, .8, 0.1, 0, .4, .4, .6, .5, -0.3, -0.5, -0.3, .3,0), nudge_y = c(0,0,0,.3, 0.4, .5, .6, 0, 0,0, .2, .3, 0, .3, 0, .4)) +
+    theme_classic() +
+    ggtitle("") +
+    xlim(-1, 1.2) +
+    ylim(-0.5, 1.2)
+dev.off()
+```
+
+Supplemental Figure 6. B. napus subgenomes exhibit slight bias in transcript levels but treatment levels are the same.
+```{r Supplemental Figure 6; message = FALSE}
+#load(file.path(inPath, file = "MasterDF. RData"))
+
+# Here we are interested in all genes so we use our original MasterDF to plot subgenome differences
+MasterDF = MasterDF %>% mutate(Subgenome = case_when(str_detect(Gene, "Bra") ~ "rapa", TRUE ~ "oleracea"))
+
+pdf("Figures/SupplementalFigure6.pdf", width = 7, height = 5)
+MasterDF %>%
+  ggplot(aes(x = Geno, y = AvgExprs, group = interaction(Geno, Treatment, Subgenome), 
+             fill = interaction(Treatment, Subgenome))) +
+  geom_boxplot(outliers = FALSE) +
+  scale_fill_manual(values = c("#DA936C", "#CC6933", "#F3D591", "#E6A91A")) +
+  theme_light() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  ylab("Average Log2 FPKM") +
+  xlab("")
+dev.off()
+```
+  
+Figure 3A - Subgenome and Arabidopsis ortholog distributions. 
+To calculate the proportion of overlapped WL genes we created a table that indicates which accessions have a given gene called WL and then repeat this for Arabidopsis orthologs (At_kMEAndkMed_FinalTable.RData). We then calculate the proportion of genes per shared 'group' and plot the distribution.
+
+*Note: creating the 'Final_WL_Reshape' object takes five to ten minutes depending on your computational power
+```{r Figure 3A; message = FALSE, warning = FALSE}
+#Final_WL = read.csv("R_input/Final_WLgenes.csv")
+#load(file = "R_input/At_kMEAndkMed_FinalTable.RData")
+
+
+# Reshape the table
+Final_WL_Reshape = Final_WLgenes
+  # assign a "rep" number for each gene-geno combo to index (rep here is number of genos with that gene)
+Final_WL_Reshape$Geno_Num = ave(as.character(Final_WL_Reshape$Gene), Final_WL_Reshape$Gene, FUN = seq_along)
+
+# The next step will duplicate the IDs column so remove it first
+Final_WL_Reshape = Final_WL_Reshape[, -1]
+
+# Use the rep number as an index. timevar is required, will have to remove after
+  # Should end up with #vars = #shared genes; will take several minutes
+Final_WL_Reshape = reshape(Final_WL_Reshape, direction = "wide", idvar = "Geno_Num", timevar = "Gene")
+Final_WL_Reshape = data.frame(t(Final_WL_Reshape))
+
+# Calc the number of genos per gene by counting every non-NA value
+Final_WL_Reshape$NumGenos <- rowSums(!is.na(Final_WL_Reshape))
+
+Final_WL_Reshape = Final_WL_Reshape[-1,]
+rownames(Final_WL_Reshape) = gsub("Geno.", "", rownames(Final_WL_Reshape))
+head(rownames(Final_WL_Reshape))
+
+# Save
+#save(Final_WL_Reshape, file = "20240621_Final_WL_Reshape.RData")
+
+## Get the number of observations (in this case genes) to calculate the proportion by number of genos
+WL_Prop = Final_WL_Reshape %>% 
+  group_by(NumGenos) %>%
+  summarise(NumGenes = length(NumGenos)) %>%
+  mutate(TotalExprs = nrow(Final_WL_Reshape), 
+         Prop_DR = NumGenes/TotalExprs)
+
+# Calculate the proportion to add to the previous plot
+PropAt = At_kMEAndkMedTable %>% 
+  group_by(NumGenos) %>%
+  summarise(NumGenes = length(NumGenos)) %>%
+  mutate(TotalExprs = nrow(At_kMEAndkMedTable), 
+         Prop_At = NumGenes/TotalExprs)
+
+## Merge the numbers from 6+ genos into one bar
+  # Create a vector and rbind
+NinePlus = c("9+", sum((PropAt[9:14, 2])), unique(PropAt$TotalExprs), sum(PropAt[9:14, 4]))
+PropAt = rbind(PropAt, NinePlus)
+
+NinePlus = c("9+", sum(WL_Prop[9:13,2]), unique(WL_Prop$TotalExprs), sum(WL_Prop[9:13, 4]))
+WL_Prop = rbind(WL_Prop, NinePlus)
+
+# Mesh into one DF 
+colnames(WL_Prop) = paste("Bra", colnames(WL_Prop))
+colnames(PropAt) = paste("At", colnames(PropAt))
+
+WL_Prop = WL_Prop[c(1:8, 14), ]
+PropAt = PropAt[c(1:8, 15), ]
+
+df = cbind(WL_Prop, PropAt)
+# Pivot to plot
+df = df %>% pivot_longer(cols = c("Bra Prop_DR", "At Prop_At"), names_to = "Species", values_to = "Proportion")
+
+pdf(file = "Figures/Figure3A.pdf", width = 4, height = 2)
+df %>%
+  ggplot(aes(x = factor(`At NumGenos`), y = as.numeric(Proportion), fill = factor(Species, levels = c("Bra Prop_DR", "At Prop_At")))) +
+  geom_col(position = position_dodge(.8), width = .8) +
+  scale_fill_manual(values = c("#7CA5B7", "#114F79")) +
+  ylab("Relative Proportion") +
+  xlab("Number of Genotypes") +
+  theme_bw() +
+  theme(text = element_text(size = 12), 
+        legend.title=element_blank(), 
+        legend.position = "none")
+dev.off()
+```
+
+In the next chunk we look at the 6 shared genotypes group to ask if genes that are WL in several accessions are using the same homoeolog, and if the expression among the homoeologs that are shared is similar. 
+
+To do this pull genes in the 4-6 group from the Final_WL_Reshape object, merge in the Arabidopsis ortholog, and write out the list to choose candidates. 
+
+Figure 3B - Paralog variation in overlap genes. Bring in the table with the genes of interest.
+```{r Figure 3B; message = FALSE}
+#load("R_input/MasterDF.RData")
+#Final_WLgenes = read.csv("R_input/Final_WLgenes.csv")
+#load("20240621_Final_WL_Reshape.RData")
+
+# Bring in the syntenic Arabidopsis genes
+synteny = read.csv("R_input/Bra_Bol_AGItair.csv")
+
+
+# Subset to keep just the genes of interest
+  # Here we want all genes that are expressed, will filter for WL later
+Overlap_Candidates = Final_WL_Reshape %>% filter(NumGenos >= 4 & NumGenos <=6)
+Overlap_Candidates = rownames_to_column(Overlap_Candidates, var = "IDs")
+
+# Add the gene annotation after the accession ID followed by the group number
+dat <- Overlap_Candidates %>% rowwise() %>%
+  mutate(across(2:(ncol(Overlap_Candidates) - 1), ~ paste(.x, IDs, NumGenos, sep = "_")))
+
+# Unlist and clean up
+dat = data.frame(IDs = unlist(dat[, 2:13]))
+  # Separate by underscore
+dat = dat %>% separate(IDs, c("Geno", "Gene", "Group"), remove = FALSE)
+  # Bring in the ATG with descriptions
+dat = left_join(dat, synteny, by = join_by("Gene" == "bra"))
+  # Remove rows that didn't map to Arabidopsis or vice versa
+Overlap_Candidates = na.omit(dat)
+
+# Write this out to choose top candidates
+write.xlsx(Overlap_Candidates, file="R_output/Overlap_Candidates.xlsx")
+
+# Pull the top candidate
+nir1 = dat[which(dat$agi == "AT2G15620"), ]
+# Remove the empty strings starting with NA
+nir1 = nir1 %>% filter(!grepl("NA_",IDs))
+# Split off the group column 
+nir1$IDs = sub("_\\d+$", "", nir1$IDs)
+# Do one more subset to just include the Brassica homoeologs that are WL
+Final_WLgenes = Final_WLgenes %>% unite("IDs", Geno:Gene, remove = FALSE)
+nir1_WL = nir1$IDs %in% Final_WLgenes$IDs
+
+# We chose the 'four' group to plot
+Fig3b_dat = nir1 %>% filter(Group == "4")
+
+# Bring in expression data to plot candidates of interest
+Fig3b_dat = MasterDF[which(MasterDF$IDs %in% Fig3b_dat$IDs), ]
+levels(factor(Fig3b_dat$Geno))
+
+
+## This includes expression of all paralogs that were water limited, not filtered by the significant ones
+pdf(file = "Figures/Figure3B.pdf")
+plot(Fig3b_dat %>%
+       filter(Treatment == "WW") %>%
+       ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgExprs, 
+                  color = Gene, fill = Gene, group = interaction(Gene, Treatment))) +
+       geom_ribbon(aes(ymin = AvgExprs - sdExprs, ymax = AvgExprs + sdExprs), alpha = .4, linetype = 0) +
+       geom_line(aes(linetype = Treatment)) +
+       scale_color_manual(values = c("#30475F", "#1D726D")) +
+       scale_fill_manual(values = c("#456789", "#94D2BD")) +
+       theme_bw() +
+       xlab("ZT (hours after lights on)") +
+       ylab("Average expression (log2 FPKM)") +
+       ylim(0, 7.5) +
+       theme(legend.position = "bottom") +
+       facet_wrap(~Geno) +
+       ggtitle(expression(paste(italic("NITRITE REDUCTASE 1"), " (AT2G15620) - Control"))))
+
+plot(Fig3b_dat %>%
+       filter(Treatment == "WL") %>%
+       ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgExprs, 
+                  color = Gene, fill = Gene, group = interaction(Gene, Treatment))) +
+       geom_line(aes(linetype = Treatment)) +
+       geom_ribbon(aes(ymin = AvgExprs - sdExprs, ymax = AvgExprs + sdExprs), alpha = .4, linetype = 0) +
+       scale_color_manual(values = c("#30475F", "#1D726D")) +
+       scale_fill_manual(values = c("#456789", "#94D2BD")) +
+       theme_bw() +
+       xlab("ZT (hours after lights on)") +
+       ylab("Average expression (log2 FPKM)") +
+       ylim(0, 7.5) +
+       theme(legend.position = "bottom") +
+       facet_wrap(~Geno) +
+       ggtitle(expression(paste(italic("NITRITE REDUCTASE 1"), " (AT2G15620) - Water Limited"))))
+dev.off()
+```
+
+Figure 3C - Paralog variation in sugar responsive genes. 
+```{r Figure 3C; warnings = FALSE; message = FALSE}
+genes = read.csv(file.path(inPath, file = "SugarResponsiveGenes.csv"))
+#load(file.path(inPath, file = "Final_WLgenes.RData"))
+
+# Clean up 
+genes = genes[, c(1,2, 5)]
+colnames(genes) = c("Gene", "ATG", "CommonName")
+
+# Subset to keep just the genes of interest
+genes2 = MasterDF[which(MasterDF$Gene %in% genes$Gene), ]
+
+# Bring in the function of each gene
+genes2 = left_join(genes, genes2, by = "Gene", relationship = "many-to-many")
+
+# Make a list by function (gene) to loop through and plot
+geneLst = split(genes2, genes2$CommonName)
+geneLst = lapply(geneLst, function(x) x %>% mutate(Subgenome = case_when(str_detect(Gene, "Bra") ~ "rapa", TRUE ~ "ole")))
+
+
+## Subset just the WL genes and plot those
+SugWLgenes = Final_WLgenes[which(Final_WLgenes$Gene %in% genes$Gene),]
+
+# Subset the masterDF to get expression of this subset of genes
+  # Do this by ID to pull out just the sig WL genes for each accession
+SugWLgenes = MasterDF[which(MasterDF$IDs %in% SugWLgenes$IDs), ]
+
+# Bring in the function of each gene
+SugWLgenes = left_join(SugWLgenes, genes, by = "Gene", relationship = "many-to-many")
+
+# Make a list by function (gene) to loop through and plot
+WL_geneLst = split(SugWLgenes, SugWLgenes$CommonName)
+
+# Add a subgenome identifier to color by 
+WL_geneLst = lapply(WL_geneLst, function(x) x %>% mutate(Subgenome = case_when(str_detect(Gene, "Bra") ~ "rapa", TRUE ~ "ole")))
+
+
+## Plot
+paralogPalette2 = c( "#456789", "#0A9396", "#94D2BD", "#FEAC72", "#E47E62", "#D9A0A0")
+
+# For the control plots pull from the original (control) geneLst
+pdf("Figures/Figure3C.pdf")
+geneLst[[5]] %>%
+  filter(Treatment == "WW") %>%
+  filter(Geno == "Ab" | Geno == "Al" | Geno == "Mu" | Geno == "Ne" | Geno == "St") %>%
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgExprs, 
+             group = interaction(Gene, Subgenome), color = interaction(Gene, Subgenome), fill = interaction(Gene, Subgenome))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = AvgExprs - sdExprs, ymax = AvgExprs + sdExprs), alpha = .2, linetype = 0) +
+  scale_color_manual(values =  c("#30475F", "#1D726D", "#FE7C20", "#AE2012")) +
+  scale_fill_manual(values = c("#456789", "#94D2BD", "#FEAC72", "#DC532E")) +
+  theme_bw() +
+  xlab("ZT (hours after lights on)") +
+  ylab("Average expression (log2 FPKM)") +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_wrap(~Geno) +
+  ggtitle(paste(geneLst[[5]]$CommonName), geneLst[[5]]$ATG)
+
+WL_geneLst[[4]] %>%
+  filter(Treatment == "WL") %>%
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgExprs, 
+             group = interaction(Gene, Subgenome), color = interaction(Gene, Subgenome), fill = interaction(Gene, Subgenome))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = AvgExprs - sdExprs, ymax = AvgExprs + sdExprs), alpha = .2, linetype = 0) +
+  scale_color_manual(values =  c("#30475F", "#1D726D", "#FE7C20", "#AE2012")) +
+  scale_fill_manual(values = c("#456789", "#94D2BD", "#FEAC72", "#DC532E")) +
+  theme_bw() +
+  xlab("ZT (hours after lights on)") +
+  ylab("Average expression (log2 FPKM)") +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_wrap(~Geno) +
+  ggtitle(paste(WL_geneLst[[4]]$CommonName), WL_geneLst[[4]]$ATG)
+dev.off()
+```
+
+Clean up the environment
+```{r}
+rm(Bnapus_FeatCount, coldata, dat, df, SugWLgenesdds, pve, vsd)
+```
+
+We now calculate the difference between max expression (phase) in WW vs WL for each gene and accession. To do this we bring in our list of orthologous matches among the homoeologs so we have a one-to-one comparison. 
+
+We also bring in a compiled object that contains all Avg_DFs for all accessions. 
+```{r Calculate phase shifts; warning = FALSE; message = FALSE}
+matches = read.csv(file.path(inPath, file = "OneToOne.csv"))
+load(file.path(inPath, file = "AvgExprs.RData"))
+
+# Pull out the columns to loop through
+wl = AvgExprs[, 4:7]
+watered = AvgExprs[, 8:11]
+
+# Get the corresponding column names that are the ZT with max expression
+max_indices <- max.col(wl, ties.method = "first")
+wl_max<- names(wl)[match(max_indices, seq_along(wl))]
+
+## Watered; make sure to run these two bits in order or rename accordingly so things don't get overwritten improperly
+max_indices <- max.col(watered, ties.method = "first")
+watered_max <- names(watered)[match(max_indices, seq_along(watered))]
+
+## Add the Max_Column information to the original dataframe
+  # Where Watered_Max is now the ZT of max expression for every gene from the watered samples
+AvgExprs = cbind(AvgExprs, Watered_Max = watered_max, wl_Max = wl_max)
+
+## Pull out just the numbers for ZT
+AvgExprs$wl_Max = gsub(".*?(\\d.*)", "\\1", AvgExprs$wl_Max)
+AvgExprs$Watered_Max = gsub(".*?(\\d.*)", "\\1", AvgExprs$Watered_Max)
+
+# Add a subgenome classifier to each gene
+AvgExprs = AvgExprs %>% mutate(Subgenome = case_when(str_detect(Gene, "Bra") ~ "rapa",str_detect(Gene, "Bo") ~ "ole",TRUE ~ NA_character_))
+
+
+## Separate into two dfs by subgenome, rename columns and merge
+rapa = AvgExprs %>% filter(Subgenome == "rapa") %>% select(Gene, Watered_Max, wl_Max, Geno)
+ole = AvgExprs %>% filter(Subgenome == "ole") %>% select(Gene, Watered_Max, wl_Max, Geno)
+# Add a subgenome identifier to the columns to merge
+prefix1 = "rapa_"
+prefix2 = "ole_"
+rapa <- rapa %>% rename_with(~paste0(prefix1, .), everything())
+ole <- ole %>% rename_with(~paste0(prefix2, .), everything())
+
+
+## Join based on matching gene names and select the required columns
+result_df <- matches %>%
+  left_join(rapa, by = c("BRA" = "rapa_Gene")) %>%
+  left_join(ole, by = c("B.oleracea_ortho" = "ole_Gene"), relationship = "many-to-many")
+
+# Create new columns that show the shift in max expression (by treatment) relative to oleracea
+result_df = result_df %>% mutate(OminusR_WateredShift = as.numeric(ole_Watered_Max) - as.numeric(rapa_Watered_Max), OminusR_wlShift = as.numeric(ole_wl_Max) - as.numeric(rapa_wl_Max))
+
+# Adjust the shifts to indicate advancements and delays
+result_df = result_df %>% 
+  mutate(OminusR_WateredShift = case_when(
+    ole_Watered_Max == 19 & rapa_Watered_Max == 1 ~ "-6", 
+    ole_Watered_Max == 19 & rapa_Watered_Max == 13 ~ "+6", 
+    ole_Watered_Max == 19 & rapa_Watered_Max == 7 ~ "+12",
+    ole_Watered_Max == 13 & rapa_Watered_Max == 7 ~ "+6", 
+    ole_Watered_Max == 13 & rapa_Watered_Max == 1 ~ "+12", 
+    ole_Watered_Max == 13 & rapa_Watered_Max == 19 ~ "-6", 
+    ole_Watered_Max == 7 & rapa_Watered_Max == 1 ~ "+6", 
+    ole_Watered_Max == 7 & rapa_Watered_Max == 13 ~ "-6", 
+    ole_Watered_Max == 7 & rapa_Watered_Max == 19 ~ "-12", 
+    ole_Watered_Max == 1 & rapa_Watered_Max == 19 ~ "+6", 
+    ole_Watered_Max == 1 & rapa_Watered_Max == 7 ~ "-6", 
+    ole_Watered_Max == 1 & rapa_Watered_Max == 13 ~ "-12", 
+    OminusR_WateredShift == 0 ~ "0",
+    # Some NAs result when genos have one homeolog but not the other
+    TRUE ~ NA))
+
+## Repeat with wl
+result_df = result_df %>% 
+  mutate(OminusR_wlShift = case_when(
+    ole_wl_Max == 19 & rapa_wl_Max == 1 ~ "-6", 
+    ole_wl_Max == 19 & rapa_wl_Max == 13 ~ "+6", 
+    ole_wl_Max == 19 & rapa_wl_Max == 7 ~ "+12",
+    ole_wl_Max == 13 & rapa_wl_Max == 7 ~ "+6", 
+    ole_wl_Max == 13 & rapa_wl_Max == 1 ~ "+12", 
+    ole_wl_Max == 13 & rapa_wl_Max == 19 ~ "-6", 
+    ole_wl_Max == 7 & rapa_wl_Max == 1 ~ "+6", 
+    ole_wl_Max == 7 & rapa_wl_Max == 13 ~ "-6", 
+    ole_wl_Max == 7 & rapa_wl_Max == 19 ~ "-12", 
+    ole_wl_Max == 1 & rapa_wl_Max == 19 ~ "+6", 
+    ole_wl_Max == 1 & rapa_wl_Max == 7 ~ "-6", 
+    ole_wl_Max == 1 & rapa_wl_Max == 13 ~ "-12", 
+    OminusR_wlShift == 0 ~ "0",
+    # Some NAs result when genos have one homoeolog but not the other
+    TRUE ~ NA))
+```
+
+Figure 3D and Supplemental Figure 7 - Phase shifts of WL genes by subgenome. For this we focus on kME genes since we are interested in ones with changes in phase (pattern). In Figure 3D we highlight a single accession from each growth response group (Large growth difference: St; Moderately growth difference: Yu; Small growth difference: Mu) to see if there is evidence of differential subgenome contribution to growth differences and/or time of day specific responses to WL. 
+
+We start by replacing our initial DiPALM calls in the original 'AllGenos_pValueskME' object with our updated Final_WLgenes for the three accessions we pulled the overlap from. 
+```{r Figure 3D; message = FALSE}
+#load("pValueskMETable.RData")
+#load("R_input/Final_WLgenes.RData")
+#load("R_input/AvgExprs.Rdata")
+
+Ab_WL = Final_WLgenes %>% filter(Geno == "Ab")
+St_WL = Final_WLgenes %>% filter(Geno == "St")
+Ca_WL = Final_WLgenes %>% filter(Geno == "Ca")
+
+# Remove the previous Ab, Ca, and St calls
+pValues_kMETable = pValues_kMETable %>% separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+# Remove the original calls
+pValues_kMETable = pValues_kMETable %>% filter(Geno != "Ab" & Geno != "Ca" & Geno != "St")
+#levels(factor(pValues_kMETable$Geno))
+
+# Bring back the new calls
+  # Remove pValue to rbind
+pValues_kMETable = pValues_kMETable[, -4]
+  # Remove Geno_Num to rbind
+Ab_WL = Ab_WL[, -c(4)]
+Ca_WL = Ca_WL[, -c(4)]
+St_WL = St_WL[, -c(4)]
+pValues_kMETable = rbind(pValues_kMETable, Ab_WL, Ca_WL, St_WL)
+nrow(pValues_kMETable %>% filter(Geno == "Ab")) # 2348; which it should be
+
+# Pull out expression data for these genes
+All_kMEs_Exprs = AvgExprs[which(AvgExprs$IDs %in% pValues_kMETable$IDs), ]
+
+## Calculate the phase change relative to watered (watered - water limited)
+All_kMEs_Exprs = All_kMEs_Exprs %>% mutate(WWminusWL = as.numeric(Watered_Max) - as.numeric(wl_Max))
+
+# Change -18 to 6; relative to ZT0
+All_kMEs_Exprs$WWminusWL = gsub("-18", "6", All_kMEs_Exprs$WWminusWL)
+All_kMEs_Exprs$WWminusWL = gsub("18", "-6", All_kMEs_Exprs$WWminusWL)
+
+## Calculate the phase shift by genotype
+  # Calculate the proportion of genes for each subgenome, by phase change group
+All_kMEs_ExprsList = split(All_kMEs_Exprs, All_kMEs_Exprs$Geno)
+All_kMEs_ExprsList = lapply(All_kMEs_ExprsList, function(x) x %>% group_by(Geno) %>% mutate(total_kME = nrow(x)) %>% ungroup())
+
+All_kMEs_ExprsShift = lapply(All_kMEs_ExprsList, function(x) x %>% group_by(WWminusWL, Subgenome) %>%
+         summarise(NumGenes = n()) %>% ungroup() %>%
+           group_by(WWminusWL) %>%
+           mutate(TotalGenes = sum(NumGenes), 
+                  PropGenes = NumGenes/TotalGenes) %>% ungroup() %>%
+           mutate(Prop_BykME = NumGenes/sum(TotalGenes/2)) %>%
+  ungroup())
+
+
+## Plot the focus accessions 
+Fig3d_Lst = All_kMEs_ExprsShift[c(14, 10, 13)]
+
+pdf("Figures/Figure3D.pdf")
+  for(i in 1:length(Fig3d_Lst)){
+print(Fig3d_Lst[[i]] %>% 
+  ggplot(aes(x = factor(WWminusWL, levels = c("0", "6", "12", "-12", "-6")), y = Prop_BykME,fill= Subgenome))+
+  geom_bar(stat="identity", color="black", position=position_dodge(),width=0.65,linewidth=0.3)+
+  coord_polar(theta = "x",start=100) +
+  #ylim(c(0, .35))+ 
+  scale_fill_manual(values = c("#039196", "#E67646")) + 
+  theme_light()+
+  theme( axis.text.y = element_text(size = 12,colour="black"),
+         axis.text.x=element_text(size = 10,colour="black")) +
+    xlab("") +
+    ylab("") +
+  ggtitle(paste(names(Fig3d_Lst[i])))
+)
+}
+dev.off()
+
+## Plot the supplemental with all accessions
+  # Bind rows as a dataframe to make a faceted plot
+AllGenos_Phase = do.call(rbind.data.frame, All_kMEs_ExprsShift)
+  # Bring in rownames as Genos
+AllGenos_Phase = rownames_to_column(AllGenos_Phase, var = "Geno")
+  # Clip off the number after the geno ID
+AllGenos_Phase$Geno = gsub("\\..*", "", AllGenos_Phase$Geno)
+
+pdf("Figures/SupplementalFigure7.pdf")
+  print(AllGenos_Phase%>% 
+          ggplot(aes(x = factor(WWminusWL, levels = c("0", "6", "12", "-12", "-6")), y = Prop_BykME,fill= Subgenome))+
+          geom_bar(stat="identity", color="black", position=position_dodge(),width=0.65,size=0.3)+
+          coord_polar(theta = "x",start=100) +
+          ylim(c(0, .35))+ 
+          scale_fill_manual(values = c("#039196", "#E67646")) +
+          theme_light()+
+          theme( axis.text.y = element_text(size = 12,colour="black"),
+                 axis.text.x=element_text(size = 10,colour="black")) +
+          xlab("") +
+          ylab("") +
+          facet_wrap(~Geno)
+  )
+dev.off()
+```
+
+Finally, we calculate the proportion of genes in each phase group for our three accessions of interest. 
+```{r}
+PhaseCount =lapply(All_kMEs_ExprsList, function(x) x %>% group_by(WWminusWL) %>% summarize(GenesPerPhase = n()))
+
+PhaseCount = do.call(rbind, PhaseCount)
+
+# Bring in the rownames with accession information 
+PhaseCount = rownames_to_column(PhaseCount, var = "Geno")
+# Clip off the extra digit
+PhaseCount$Geno = gsub("\\.[0-9]", "", PhaseCount$Geno)
+
+## Calculate the proportion for each phase and accession
+PhaseProp = PhaseCount %>%
+  group_by(Geno) %>%
+  mutate(Total = sum(GenesPerPhase)) %>%
+  ungroup() %>%
+  group_by(Geno, WWminusWL) %>%
+  summarize(PhaseProp = sum(GenesPerPhase) / first(Total)) %>%
+  ungroup()
+
+# Write this out
+write.xlsx(PhaseProp, file = "R_output/PhaseProportions.xlsx")
+```
+
+
+The DiPALM analysis often results in thousands of genes with differential time of day patterns. The number of calls alone makes it difficult to understand what these patterns look like. To get around this we take our list of DiPALM genes and re-cluster them to group genes with similar patterns. We can then plot the clusters to visualize the patterns. For this study we chose a single accession for each growth response group (Large growth difference: St; Moderately growth difference: Yu; Small growth difference: Mu) and plotted the DiPALM clusters.
+
+Below we provide the code to create these clusters for Av but this was done separately for each accession. For the following analysis you can load the data we provide to run GO enrichment on the previously selected DiPALM clusters. Similarly to before the filename for these objects contain the accession ID but that is not part of the name in the R environment.
+```{r example code to create DiPALM clusters for a single accession}
+#load(file = "R_input/Av_SigkMEs.RData")
+#load(file = "R_input/Av_LimmaModskMEs.RData")
+
+## Cluster contrasts for differentially patterned genes into modules
+#LimmaModskMEsSig<-LimmaModskMEs[names(SigkMEs),]
+#patternCor<-cor(t(LimmaModskMEsSig))
+#patternTree<-hclust(as.dist(1-patternCor),method = "complete")
+
+## Re-cluster genes based on similarity of expression pattern (kME)
+  # Depending on the number of genes going in you may want to adjust the minClusterSize
+#patternClusters<-cutreeDynamic(dendro =patternTree, minClusterSize = 100, distM = 1-patternCor, deepSplit = 1)
+
+# adds the gene names back as labels; now have a number for each gene that corresponds to what cluster it belongs in
+#names(patternClusters)<-patternTree$labels
+# Check the numbers per cluster, can adjust minClusterSize if waranted 
+#table(patternClusters)
+
+#put clusters into a list
+#patternClusters<-tapply(X = names(patternClusters), INDEX = patternClusters, function(x) x)
+
+##### CHANGE BASED ON GENOTYPE #####
+#save(patternClusters, file = file.path(outPath, "Av_DiPALMClusters.RData"))
+
+#print all clusters into a single pdf file
+### CHANGE BASED ON GENOTYPE ### 
+#pdf("Figures/Av_DiPALMclusters.pdf",width = 10,height = 5)
+### ### ### ### ### ### ### ### 
+#for(i in 1:length(patternClusters)) {
+  # PlotTCsRibbon(TClst = TCs_List, 
+  #              tgenes = patternClusters[[i]],
+  #              scale = T, 
+  #              tcols = c("darkgoldenrod1", "darkgoldenrod1", "darkgoldenrod1", "chartreuse4", "chartreuse4", "chartreuse4"), 
+  #              tltys = c(1, 2, 3, 4, 1, 2, 3, 4), 
+  #              main = paste("Pattern Change Cluster:", names(patternClusters)[i],"#Genes:",length(patternClusters[[i]]),sep=" "))
+#}
+#dev.off()
+```
+
+Because each cluster is a group of genes with highly correlated patterns it is likely that these genes are under similar regulation. We are now curious what biological pathways these genes may be involved in. To explore this we perform Gene Ontology (GO) analyses on each cluster and accession separately. We then plot the expression of genes in a given cluster which we selected as 1. clusters with interesting phase shifts (see lines _____) and 2. clusters enriched in informative pathways. 
+
+We first load and clean the DiPALMClusters that we previously made using the above script.
+```{r clean DiPALM clusters}
+#load(file.path(inPath, file = "Yu_DiPALMClusters.RData"))
+#load(file.path(inPath, file = "Mu_DiPALMClusters.RData"))
+#load(file.path(inPath, file = "St_DiPALMClusters.RData"))
+
+## Pull out the genes in the cluster of interest by accession
+geno1 = MasterDF %>% filter(Geno == "Yu")
+# Pull out these genes and subset 
+clust7_yu = geno1[which(geno1$Gene %in% Yu_DiPALMClusters[[7]]), ]
+
+## Calculate the average zScore
+Yu_avgZ = clust7_yu %>% group_by(Treatment, ZTs) %>%
+  mutate(AvgZ = mean(zScore), 
+         sdZ = sd(zScore)) %>%
+  ungroup()
+
+## Repeat for Mu
+geno2 = MasterDF %>% filter(Geno == "Mu")
+clust8_mu = geno2[which(geno2$Gene %in% Mu_DiPALMClusters[[8]]), ]
+
+Mu_avgZ = clust8_mu %>% group_by(Treatment, ZTs) %>%
+  mutate(AvgZ = mean(zScore), 
+         sdZ = sd(zScore)) %>%
+  ungroup()
+
+## Repeat for St
+geno3 = MasterDF %>% filter(Geno == "St")
+clust9_st = geno3[which(geno3$Gene %in% St_DiPALMClusters[[9]]), ]
+
+St_avgZ = clust9_st %>% group_by(Treatment, ZTs) %>%
+  mutate(AvgZ = mean(zScore), 
+         sdZ = sd(zScore)) %>%
+  ungroup()
+```
+
+Figure 3E - Gene Ontology enrichment of DiPALM clusters that have the same phase change as shown in Panel D. Here we visually examined the previously made DiPALM clusters and identified those with a matching phase change from Figure 3D. We then ran GO to see what biological processes the clusters were enriched in.
+
+To save time we will skip this section since we have provided the full list of enriched GO terms with their corresponding gene set and which DiPALM cluster they are enriched in. This can be found in the 'Metadata/DiPALMClusters_GO_Terms' table. 
+
+If you decide to run through the code note that it will need to be run for each accession separately.
+```{r Run GO enrichment on DiPALMClusters}
+# Load some pre-defined Rfunctions
+#source(file.path(inPath, file = "Rfunctions.R"))
+
+# Load the GO BP annotations 
+#EnrichGo_BP = read.csv(file.path(inPath, "Nap_GO_BP_Annotations.txt"),stringsAsFactors = F)
+
+# This function is used to put the annotations in a useful format to calculate categorical enrichment
+#EnrichGo_BP = BuildEnrichMaps(inDF = EnrichGo_BP)
+
+# Load the GO term descriptions
+#GODescriptions<-read.csv(file.path(inPath, "GO_Term_Descriptions.txt"),stringsAsFactors = F)
+#GODescriptions<-setNames(object = GODescriptions$Description, nm = GODescriptions$Goterm)
+
+# Define your reference set to test against. We use all expressed genes
+#Ref = unique(geno1$Gene)
+
+
+## Run the enrichment for each cluster
+#EnrichLst <-lapply(St_DiPALMClusters,function(x) CalcEnrich(MapBuild = EnrichGo_BP, testvec = x, codedesc = GODescriptions, refvec = Ref))
+#names(EnrichLst) = names(St_DiPALMClusters)
+
+# Filter out all non-significant categories
+#EnrichLst_Sig.05 <-lapply(EnrichLst,function(x) x@CatList[which(as.numeric(x@CatList[,"Adj_P-Value"]) <= 0.05),,drop=F])
+#names(EnrichLst_Sig.05) = names(EnrichLst)
+
+
+##### CHANGE BASED ON ACCESSION #####
+#dir.create(path = file.path(outPath,"St_DiPALMClusters_Enrichment"))
+  # This creates an individual .csv for each cluster
+#sapply(names(EnrichLst_Sig.05), function(x) 
+ #write.csv(EnrichLst_Sig.05[[x]],file=file.path(outPath,"St_DiPALMClusters_Enrichment",paste(x,".csv",sep=""))))
+##### ##### ##### ##### ##### #####
+```
+
+This chunk of code walks you through how to compile all of your output files from GO and compile them into a large master sheet. 
+```{r Compile results of GO enrichment on DiPALM clusters into one sheet}
+## Bring the results back in and combine into a single df
+#enrich_files <- list.files(full.names = F, recursive = F)
+
+# Put into a list to loop through and clean up
+#enrich_list <- lapply(enrich_files, function(x) read.csv(paste0(x)))
+#enrich_files = gsub(".csv", "", enrich_files)
+#names(enrich_list) = enrich_files
+#names(enrich_list)
+
+# Add a cluster id column to each element of the list
+#enrich_master = list()
+#for(i in 1:length(enrich_list)) {
+#  enrich_master[[i]] = enrich_list[[i]] %>%
+#    mutate(Cluster = names(enrich_list[i]))
+#}  
+#names(enrich_master) = names(enrich_list)
+#names(enrich_master)
+
+
+## Bind all the elements together
+#enrich_df <- do.call("rbind", enrich_master)
+#colnames(enrich_df)[1] = "GO_Term"
+
+# Generally interested in just over enriched
+#overEnrich_Master = enrich_df %>% filter(Enrichment.Direction == "Over")
+#overEnrich_Master = overEnrich_Master %>% separate(GO_Term, into = c("GO_Term", "Description"), sep = " - ")
+
+##### CHANGE BASED ON ACCESSION  #####
+# write it back out as a final master sheet 
+#write.csv(overEnrich_Master, file = "Ab_DiPALMClusters_MasterEnrichment.csv", row.names = FALSE)
+##### ##### ##### ##### ##### #####
+```
+
+Figure 3E - We now plot the standardized expression of genes from DiPALM clusters (above)
+```{r Figure 3E}
+## Plot into a single pdf
+pdf("Figures/Figure3E.pdf")
+St_avgZ %>% 
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgZ, 
+             color = Treatment, group = interaction(Rep, factor(Treatment)))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = AvgZ - sdZ, ymax = AvgZ + sdZ, fill = Treatment), alpha = .1, color = NA) +
+  scale_color_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  scale_fill_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  theme_bw() +
+  xlab("") +
+  ylab("Normalized expression") +
+  theme(legend.position = "none") +
+  ggtitle(paste0("St: Photosynthesis (", length(unique(St_avgZ$Gene)), ")"))
+
+Yu_avgZ %>% 
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgZ, 
+             color = Treatment, group = interaction(Rep, factor(Treatment)))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = AvgZ - sdZ, ymax = AvgZ + sdZ, fill = Treatment), alpha = .1, color = NA) +
+  scale_color_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  scale_fill_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  theme_bw() +
+  xlab("") +
+  ylab("Normalized expression") +
+  theme(legend.position = "none") +
+  ggtitle(paste0("Yu:Gene silencing (", length(unique(Yu_avgZ$Gene)), ")"))
+
+Mu_avgZ %>% 
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), y = AvgZ, 
+             color = Treatment, group = interaction(Rep, factor(Treatment)))) +
+  geom_line() +
+  geom_ribbon(aes(ymin = AvgZ - sdZ, ymax = AvgZ + sdZ, fill = Treatment), alpha = .1, color = NA) +
+  scale_color_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  scale_fill_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+  theme_bw() +
+  xlab("") +
+  ylab("Normalized expression") +
+  theme(legend.position = "none") +
+  ggtitle(paste0("Mu: Sulfur metabolism (", length(unique(Mu_avgZ$Gene)), ")"))
+
+dev.off()
+```
+
+
+##### Response Scores
+Running each accession through DiPALM gives us unique sets of drought responsive genes. However, this approach does not make it easy to compare expression patterns of these genes among the accessions. To do this we first calculate average responses per gene, per accession, and then combine the shared responses (retaining genes that are only expressed in every accession) into a single dataframe. These response scores are then input back into WGCNA to obtain global expression patterns (eigengenes) that now describe all 14 accessions. 
+
+We first pull out any gene that is shared among all accessions by reloading 'AllGenos_AvgExprs_DF' and adding a column that counts the number of accessions each gene is found in. We then pull rows (genes) that have a count of 14.
+```{r Pulling out shared genes}
+#load(file.path(inPath, file = "AvgExprs.RData"))
+
+# Count the number of times a gene is duplicated
+dupCounts = setDT(AvgExprs)[, list(Count = .N), AvgExprs$Gene]
+# Pull those that are shared among all 14 genos
+sharedGenes = dupCounts %>% filter(Count == 14)
+
+# Subset the main df to just retain these shared genes. Should have 14*length(AvgExprs) = 448126
+sharedGenes = AvgExprs[which(AvgExprs$Gene %in% sharedGenes$AvgExprs),]
+```
+
+Now we can calculate the response scores. These are simply the difference between WL expression and watered expression for every gene at every time point. A positive response indicates that expression was up in drought while a negative response indicates that expression was down in drought at that time point.
+```{r Calculate response scores; message = FALSE}
+responseScores = AvgExprs %>%
+  mutate(Response_ZT1 = WL_1 - WW_1, 
+         Response_ZT7 = WL_7 - WW_7, 
+         Response_ZT13 = WL_13 - WW_13, 
+         Response_ZT19 = WL_19 - WW_19) %>%
+  select(!WL_1:WW_19)
+
+# Bring IDs back into rownames and remove the Geno:Gene identifiers before running WGCNA
+#rownames(responseScores) = NULL
+#responseScores = column_to_rownames(responseScores, var = "IDs")
+responseScores = responseScores %>% select(!Geno:Gene)
+
+# Standardize the response scores such that the lowest value is greater than zero 
+  # This is because WGCNA cannot handle negatives
+minVal = abs(min(responseScores[, 5:8])) + 1
+Standard_responseScores = minVal + responseScores[,5:8]
+
+# Make a matrix so it works well with WGCNA
+Standard_responseScores_Mat = as.matrix(Standard_responseScores)
+#save(Standard_responseScores_Mat, file = file.path(outPath, file = "Standard_responseScores_Mat.RData"))
+```
+
+We now run the standardized response scores through WGCNA like we did previously with our accession specific time course data. This provides a way to group (cluster) all of the responses among all 14 genotypes so we can visualize patterns and explore specific modules. 
+
+This is very computationally intensive and will likely have to be run on a supercomputer. This is the code we used and note that after estimating parameters we decided on a power of 18.
+```{r Build Response Score Network}
+#load(file.path(inPath, "Standard_responseScores_Mat.RData"))
+
+# Allow parallel processing depending on your set up
+#allowWGCNAThreads(48)
+
+# Construct the network
+#BlockModsShared <- blockwiseModules(datExpr = t(Standard_responseScores_Mat), power = 18,
+#networkType = "signed", corType="bicor", TOMType="signed", minModuleSize=100, mergeCutHeight=0.30, deepSplit=1, pamRespectsDendro = F, verbose=5, maxBlockSize = 7500)
+
+# Save
+#save(BlockModsShared, file="StandardResponseScore_BlockMods.RData")
+```
+
+We now examine the response scores to identify common time of day responses across accessions or if there are sub groups.
+
+Figure 4A - Global transcriptional responses to WL for all 14 accessions.
+### Also need to reorganize the panels and rename by number so it matches the figure in the paper; then save it appropriately
+```{r Figure 4A; message = FALSE}
+#load(file.path(inPath, file = "BlockModsShared.RData"))
+
+responseMods = BlockModsShared$colors
+responseMods = data.frame(IDs = names(responseMods), Module = responseMods)
+
+# Genes that do not have a strong fit with any particular eigengene are placed in an arbitrary "grey" module. Remove this
+responseMods = responseMods %>% filter(Module != "grey")
+
+# Pivot the response df to plot
+responseScores = responseScores[, -c(2:4)]
+
+responseScores = responseScores %>%
+  pivot_longer(cols = !IDs, names_to = "ZTs", values_to = "Response") %>%
+  separate(IDs, c("Geno", "Gene"), remove = FALSE)
+
+#responseScores = responseScores %>% 
+ # mutate(ZTs = str_replace_all(responseScores$ZTs, "Response_", ""))
+
+# Bring in the module info
+Master_responseDF = inner_join(responseScores, responseMods)
+
+# Calculate the average response by Module, Geno, and ZT for plotting purposes
+Master_responseDF = Master_responseDF %>% group_by(Module, Geno, ZTs) %>%
+  mutate(AvgResponse = mean(Response), 
+         sdResponse = sd(Response)) %>% ungroup()
+
+# Clean up the ZTs column
+Master_responseDF$ZTs = gsub("Response_", "", Master_responseDF$ZTs)
+
+## Plot to take a quick look 
+Master_responseDF %>% 
+    ggplot(aes(x = factor(ZTs, levels = c("ZT1", "ZT7", "ZT13", "ZT19")), y = AvgResponse)) +
+    geom_line(aes(group = interaction(Geno,Module))) +
+    scale_color_manual(values = c("darkgoldenrod1", "chartreuse4")) +
+    annotate(geom = "rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0, fill = "chartreuse4", alpha = .2) +
+    annotate(geom = "rect", xmin = -Inf, xmax = Inf, ymin = 0, ymax = Inf, fill = "gold1", alpha = .2) +
+    theme_bw() +
+    facet_wrap(~Module) +
+    xlab("") +
+    ylab("Average Response")
+
+# Save
+#save(Master_responseDF, file = file.path(outPath, file = "Master_responseDF.RData"))
+
+# See if all accessions are represented in all modules
+response_GenoList = split(Master_responseDF, Master_responseDF$Geno)
+lapply(response_GenoList, function(x) levels(factor(x$Module)))
+```
+
+We find that all accessions have some number of genes in every module. This implies that accessions are altering patterns of shared gene expression under WL in a similar way (i.e. genes are likely to be under similar regulation). However, we don't know if these genes are involved in similar biological functions. To explore this we next run GO using the Final_WLgenes object we created earlier for each accession within a given module (Figure 4B). We do this by creating a dataframe from the 'BlockModsShared$colors' object we made above which contains module information for each accession_gene pair. We then run the enrichment like we did earlier (lines ____) only this time for each accession/module group.
+
+For the output of this analysis see 'Metadata/ResponseScore_GO_Terms' excel sheet.
+
+Figure 4B - Visualizing significant enrichment of biological pathways likely to alter growth responses (carbohydrate metabolism, sulfur metabolism, and photosynthesis) for representative modules. While we initially ran this for every module in the ResponseScore network, we now provide the code to recreate Figure4B, which includes plots of M1, M2, M3, and M8 because they are good examples of when accessions are enriched in similar pathways but the timing of expression response varies. The approach is the same for any module.
+
+Note that after creating the base plots in R we regrouped terms by BroadDescriptor in Adobe Illustrator.
+```{r Figure 4B; message = FALSE}
+terms = read_xlsx("R_input/Final_AllModsOverEnrich_BroadDescript.xlsx", sheet = "CarbsSulfurGSLsPhoto")
+
+# Split into a list with elements = modules
+Fig4B_Lst = split(terms, terms$Module)
+
+# Make a color palette
+paralogPalette2 = c( "#456789", "#E8F0C1", "#94D2BD", "#E47E61", "#FBBE4A", "#9D6143",
+                     "#DAA0A0", "#73AA7D", "#079396", "#FAAB73")
+
+## If time can add a modlabeller to keep the colors specific to genotypes
+
+## Calculate the negative log of all the Pvalues to plot
+Fig4B_Lst = lapply(Fig4B_Lst, function(x) x %>% mutate(NegLog_PValue = -log(Adj_P.Value)))
+
+## If the NegLog_PValue is greater than 30, round it down 
+lapply(Fig4B_Lst, function(x) range(x$NegLog_PValue))
+
+Fig4B_Lst = lapply(Fig4B_Lst, function(x) x %>% mutate(Round_NegLog = case_when(NegLog_PValue >= 30 ~ 30,TRUE ~ NegLog_PValue)))
+
+# Keep just the modules we are most interested in 
+Fig4B_Lst = Fig4B_Lst[c(3, 12, 8, 4)]
+
+# Plot each module in a separate page on the same pdf
+pdf("Figures/Figure4B.pdf")
+for(i in 1:length(Fig4B_Lst)){
+plot(Fig4B_Lst[[i]] %>% 
+  ggplot(aes(x = fct_reorder(Description, Round_NegLog), y = Round_NegLog)) +
+  geom_bar(aes(color = Geno, fill = Geno, group = interaction(Description, Geno)), 
+           position = position_dodge2(preserve = c("single")),width = .95, stat = "identity") +
+  #scale_y_reverse() +
+  coord_flip() +
+  theme_classic() +
+  scale_fill_manual(values = paralogPalette2) +
+  scale_color_manual(values = paralogPalette2) +
+  ylab("") +
+  #ylim(0, 30) +
+  ggtitle(paste(names(Fig4B_Lst[i]))) 
+)
+}
+dev.off()
+```
+
+We now focus in on gene expression of select accessions that are enriched in pathways that we are interested in, starting with photosynthesis and carbohydrate metabolism (Figure 4B). We choose two accessions (Ab; St) that are over enriched in similar processes but have different expression patterns (modules).
+
+Figure 5A - Temporal gene expression of carbohydrate and photosynthetic related processes in Ab and St. The data and code for Figure 5B and C can be found in a separate Markdown (***insert name of their markdown here ***)
+
+We first do some re-formating of the GO output to have unique gene_accession_terms per row. 
+```{r Re-format GO output}
+## Bring in the tab with carbohydrate, photosynthesis, sulfur and gsl terms
+#terms = read_xlsx("R_input/Final_AllModsOverEnrich_BroadDescript.xlsx", sheet = "CarbsSulfurGSLsPhoto")
+# Load the syntenic Arabidopsis/Bnapus table
+#synteny = read.csv("R_input/Bra_Bol_AGItair.csv")
+
+
+## Create a function to apply to this list that will do the clean up 
+masterFunctions = function(x) {
+  #clean up and remove the pipe
+  x = data.frame(x %>%
+                   mutate(GenesWithAnn = str_replace_all(GenesWithAnn, '\\|', "")) %>%
+                   ungroup())
+  
+  # pull out the individual annotations into a list by splitting on the weird space
+  genes = str_split(x$GenesWithAnn, "  ")
+  names(genes) = paste(x$Geno, x$Module)
+  #specify that you want multiple outputs. Use list() instead of c() if want x and genes to be nested in each list
+  return(list(x=x, genes=genes))
+}
+
+
+# Split the DF on Broad descriptor and apply the function to all elements
+master = split(terms, terms$BroadDescriptor)
+master = lapply(master, masterFunctions)
+
+# Calculate the number of genes
+geneNums = list()
+for(i in 1:length(master)) {
+  geneNums[[i]] = data.frame(ID = names(master[[i]]$genes))
+}
+
+names(geneNums) = names(master)
+
+
+# Save the gene names in a separate list and remove from master 
+geneNames = list()
+for(i in 1:length(master)) {
+  geneNames[i] = master[[i]][-1]
+  master[[i]] = master[[i]][[1]] %>% select(!GenesWithAnn)
+}
+
+names(geneNames) = names(master)
+
+## Merge the data from each list into a single df
+masterGO = do.call(rbind, master)
+geneNumsGO = do.call(rbind, geneNums)
+GOgroups = cbind(masterGO, geneNumsGO)
+# Can remove the duplicate ID column now
+GOgroups = GOgroups[, -8]
+
+
+## Expand the list of genes into a larger dataframe
+go_df = unlist(geneNames) # 1627
+go_df = data.frame(ID = names(go_df), Gene = go_df)
+# Split the ID column to match with GOgroups
+go_df = go_df %>% separate(ID, c("BroadDescriptor", "IDs"), sep = "\\.")
+go_df = go_df %>% separate(IDs, c("Geno", "Module"), sep = " ")
+# Trim off the trailing number in the module names
+go_df$Module = gsub("[0-9]", "", go_df$Module)
+levels(factor(go_df$Module))
+
+## Bind the gene annotations in with GOgroups
+go_df = full_join(GOgroups, go_df, relationship = "many-to-many")
+  # Just want unique genes by accession and term 
+go_df = unique(go_df)
+
+## Bring in the corresponding ATGs and modules for each gene
+go_df_atg = synteny[which(synteny$bra %in% go_df$Gene),]
+
+# Bind together to pull in module information; will add expression later
+go_df_atg_mod = left_join(go_df, Master_responseDF, by = c("Geno", "Gene"), relationship = "many-to-many")
+# Add the ATG and the TAIR description as well
+go_df_atg_mod = left_join(go_df_atg_mod, go_df_atg, by = join_by("Gene" == "bra"))
+
+# Clean up
+go_df_atg_mod  = go_df_atg_mod[, -c(10:14)]
+colnames(go_df_atg_mod)[4] = "Module"
+colnames(go_df_atg_mod)[6] = "GO_ID"
+  # Some duplication happens in the merging; remove
+go_df_atg_mod = unique(go_df_atg_mod)
+
+# Write this out and add the cleaned up version to the Metadata table
+write.xlsx(go_df_atg_mod, file = "R_output/CleanedUpGenes_CarbsSulfurGSLPhoto.xlsx")
+```
+
+We can now subset the re-formatted GO output to plot expression of carbohydrate related genes for our four accessions. 
+```{r}
+go_df_atg_mod = read.xlsx("R_output/CleanedUpGenes_CarbsSulfurGSLPhoto.xlsx")
+## Pull out the accessions with enrichment
+Ab = go_df_atg_mod %>% filter(Geno == "Ab")
+St = go_df_atg_mod %>% filter(Geno == "St")
+
+## Subset the specific descriptions for each panel
+levels(factor(Ab$BroadDescriptor))
+Ab_carbon = Ab %>% filter(grepl("carbon fixation", Description))
+
+# Since Ab only has enrichment in one module, bring in the expression data and plot
+Ab_carbonExprs = MasterDF[which(MasterDF$IDs %in% Ab_carbon$IDs), ]
+
+
+Fig5a_AbCarbFix = Ab_carbonExprs %>% 
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+             y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+  geom_line() +
+  theme_bw() +
+  xlab("") +
+  scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+  ggtitle("Ab: Carbon fixation") +
+  theme(legend.position = "none")
+
+### Repeat for St
+St_carbon = St %>% filter(grepl("carbon fixation", Description))
+
+# Check how many modules are present in each df, we only plot one module at a time
+levels(factor(St_carbon$Module))
+
+# Although St has photo terms in a few modules, the vast majority are in the yellow module
+St_carbon = St_carbon %>% filter(Module == "yellow")
+St_carbonExprs = MasterDF[which(MasterDF$IDs %in% St_carbon$IDs), ]
+
+Fig5a_StCarbFix = St_carbonExprs %>% 
+  ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+             y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+  geom_line() +
+  theme_bw() +
+  xlab("") +
+  scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+  ggtitle("St: Carbon fixation") +
+  theme(legend.position = "none")
+
+
+## Compare expression patterns of these genes in other accessions that were not enriched
+Mu = MasterDF %>% filter(Geno == "Mu")
+Ne = MasterDF %>% filter(Geno == "Ne")
+
+  # Pull out carbon fixation genes
+Mu_CarbExprs = Mu[which(Mu$Gene %in% Ab_carbon$Gene), ]
+Ne_CarbExprs = Ne[which(Ne$Gene %in% Ab_carbon$Gene), ]
+
+# How many were called by DiPALM
+Mu_CarbExprs = Mu_CarbExprs[which(Mu_CarbExprs$IDs %in% Final_WL$IDs),]
+Ne_CarbExprs = Ne_CarbExprs[which(Ne_CarbExprs$IDs %in% Final_WL$IDs),]
+
+  # How many modules
+Mu_IDs = Mu_CarbExprs %>% unite("IDs", Geno:Gene)
+  # Which module has the most genes
+Mu_Mods = responseMods[which(responseMods$IDs %in% Mu_IDs$IDs),]
+Mu_CarbExprsMods = left_join(Mu_CarbExprs, Mu_Mods, by = "IDs")
+
+Ne_IDs = Ne_CarbExprs %>% unite("IDs", Geno:Gene)
+Ne_Mods = responseMods[which(responseMods$IDs %in% Ne_IDs$IDs),]
+Ne_CarbExprsMods = left_join(Ne_CarbExprs, Ne_Mods, by = "IDs")
+
+
+# Plot
+Fig5a_Mu_CarbFix = Mu_CarbExprsMods %>% 
+    filter(Module == "turquoise") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Mu: Carbon fixation") +
+    theme(legend.position = "none")
+
+Fig5a_Ne_CarbFix = Ne_CarbExprsMods %>% 
+  filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Ne: Carbon fixation") +
+    theme(legend.position = "none")
+
+#Plot
+pdf("Figures/Fig5A.pdf")
+Fig5a_AbCarbFix
+Fig5a_StCarbFix
+Fig5a_Mu_CarbFix
+Fig5a_Ne_CarbFix
+dev.off()
+```
+
+We were also curious how many of the other accessions had WL genes that were not enriched in carbon fixation. We were especially interested in accessions in different growth groups that also had different patterns of unenriched WL genes. 
+```{r}
+## Compare expression patterns of these genes in other accessions that were not enriched
+  # Highly responsive; St was already run
+Av = MasterDF %>% filter(Geno == "Av")
+Br = MasterDF %>% filter(Geno == "Br")
+Gr = MasterDF %>% filter(Geno == "Gr")
+  # Intermediate; skipping Ze
+Ca = MasterDF %>% filter(Geno == "Ca")
+Da = MasterDF %>% filter(Geno == "Da")
+DH12 = MasterDF %>% filter(Geno == "DH12")
+DH20 = MasterDF %>% filter(Geno == "DH20")
+  # Lowly responsive; Mu and Ne were already ran. Skip Qu
+Al = MasterDF %>% filter(Geno == "Al")
+Se = MasterDF %>% filter(Geno == "Se")
+
+
+## Pull out carbon fixation genes
+CarbFix_genes = c(Ab_carbon$Gene, St_carbon$Gene) %>% unique()
+
+Av_CarbExprs = Av[which(Av$Gene %in% CarbFix_genes), ]
+Br_CarbExprs = Br[which(Br$Gene %in% CarbFix_genes), ]
+Gr_CarbExprs = Gr[which(Gr$Gene %in% CarbFix_genes), ]
+
+Ca_CarbExprs = Ca[which(Ca$Gene %in% CarbFix_genes), ]
+Da_CarbExprs = Da[which(Da$Gene %in% CarbFix_genes), ]
+DH12_CarbExprs = DH12[which(DH12$Gene %in% CarbFix_genes), ]
+DH20_CarbExprs = DH20[which(DH20$Gene %in% CarbFix_genes), ]
+
+Al_CarbExprs = Al[which(Al$Gene %in% CarbFix_genes), ]
+Se_CarbExprs = Se[which(Se$Gene %in% CarbFix_genes), ]
+
+
+## How many were called by DiPALM
+Av_CarbExprs = Av_CarbExprs[which(Av_CarbExprs$IDs %in% Final_WL$IDs),] # No WL
+Br_CarbExprs = Br_CarbExprs[which(Br_CarbExprs$IDs %in% Final_WL$IDs),]
+Gr_CarbExprs = Gr_CarbExprs[which(Gr_CarbExprs$IDs %in% Final_WL$IDs),]
+
+Ca_CarbExprs = Ca_CarbExprs[which(Ca_CarbExprs$IDs %in% Final_WL$IDs),]
+Da_CarbExprs = Da_CarbExprs[which(Da_CarbExprs$IDs %in% Final_WL$IDs),]
+DH12_CarbExprs = DH12_CarbExprs[which(DH12_CarbExprs$IDs %in% Final_WL$IDs),]
+DH20_CarbExprs = DH20_CarbExprs[which(DH20_CarbExprs$IDs %in% Final_WL$IDs),]
+
+Al_CarbExprs = Al_CarbExprs[which(Al_CarbExprs$IDs %in% Final_WL$IDs),] 
+Se_CarbExprs = Se_CarbExprs[which(Se_CarbExprs$IDs %in% Final_WL$IDs),]
+
+
+## Which module has the most genes
+Br_Mods = responseMods[which(responseMods$IDs %in% Br_CarbExprs$IDs),]
+Br_CarbExprsMods = left_join(Br_CarbExprs, Br_Mods, by = "IDs") 
+  # blue has 36, black 28
+table(Br_Mods$Module)
+Gr_Mods = responseMods[which(responseMods$IDs %in% Gr_CarbExprs$IDs),]
+Gr_CarbExprsMods = left_join(Gr_CarbExprs, Gr_Mods, by = "IDs") 
+table(Gr_Mods$Module)
+  # blue has 20
+Ca_Mods = responseMods[which(responseMods$IDs %in% Ca_CarbExprs$IDs),]
+Ca_CarbExprsMods = left_join(Ca_CarbExprs, Ca_Mods, by = "IDs") 
+table(Ca_Mods$Module)
+  # blue has 4
+Da_Mods = responseMods[which(responseMods$IDs %in% Da_CarbExprs$IDs),]
+Da_CarbExprsMods = left_join(Da_CarbExprs, Da_Mods, by = "IDs") 
+table(Da_Mods$Module)
+  # blue has 4
+DH12_Mods = responseMods[which(responseMods$IDs %in% DH12_CarbExprs$IDs),]
+DH12_CarbExprsMods = left_join(DH12_CarbExprs, DH12_Mods, by = "IDs") 
+table(DH12_Mods$Module)
+  # blue has 11
+DH20_Mods = responseMods[which(responseMods$IDs %in% DH20_CarbExprs$IDs),]
+DH20_CarbExprsMods = left_join(DH20_CarbExprs, DH20_Mods, by = "IDs") 
+table(DH20_Mods$Module)
+  # yellow has 2
+
+Al_Mods = responseMods[which(responseMods$IDs %in% Al_CarbExprs$IDs),]
+Al_CarbExprsMods = left_join(Al_CarbExprs, Al_Mods, by = "IDs") 
+table(Al_Mods$Module)
+  # blue has 1; greenyellow has 1
+Se_Mods = responseMods[which(responseMods$IDs %in% Se_CarbExprs$IDs),]
+Se_CarbExprsMods = left_join(Se_CarbExprs, Se_Mods, by = "IDs") 
+table(Se_Mods$Module)
+  # turquoise has 2
+
+
+## Plot
+pdf(file.path(FigPath, file = "NotEnrichedCarbFix.pdf"))
+Al_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Al (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+Al_CarbExprsMods %>% 
+    filter(Module == "greenyellow") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Al (M10): Carbon fixation") +
+    theme(legend.position = "none")
+
+Br_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Br (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+Br_CarbExprsMods %>% 
+    filter(Module == "black") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Br (M5): Carbon fixation") +
+    theme(legend.position = "none")
+
+Gr_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Gr (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+Ca_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Ca (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+Da_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Da (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+DH12_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("DH12 (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+
+DH20_CarbExprsMods %>% 
+    filter(Module == "blue") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("DH20 (M2): Carbon fixation") +
+    theme(legend.position = "none")
+
+
+DH20_CarbExprsMods %>% 
+    filter(Module == "yellow") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("DH20 (M3): Carbon fixation") +
+    theme(legend.position = "none")
+
+Se_CarbExprsMods %>% 
+    filter(Module == "turquoise") %>%
+    ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+               y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+    geom_line() +
+    theme_bw() +
+    xlab("") +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ggtitle("Se (M8): Carbon fixation") +
+    theme(legend.position = "none")
+dev.off()
+```
+
+
+We now use a similar approach to explore sulfur metabolism and look for enrichment in genes that may help describe the differences in growth found from our initial phenotyping experiments. 
+
+Because we are also interested in exploring differences at specific parts of the pathway (i.e. GSL catabolism vs General sulfur metabolism) we used the cleaned up 'go_df_atg_mod' object used to plot photosynthesis/carbohydrate enrichment and manually added an additional column that groups genes/terms by where they fall in the larger pathway. We have provided this information in the "AllSulfurTerms_ATGs.xlsx" excel file. 
+```{r}
+sulfurGSL = read_xlsx("R_input/AllSulfurTerms_ATGs.xlsx")
+#load("R_input/MasterDF.RData")
+
+# Remove extra notes and things
+sulfurGSL = sulfurGSL[, -c(13:14)]
+
+## We are less interested in specific terms here and instead want to plot genes by parts of the pathway
+sulfurGSL = sulfurGSL[which(!duplicated(sulfurGSL$IDs)), ]
+
+## Create a list to plot all genes within S-met by group
+Smet_PathList = split(sulfurGSL, sulfurGSL$Group)
+  # Add a layer to split again by Module 
+Smet_PathList = lapply(Smet_PathList, function(x) split(x, x$Module))
+
+# Subset to plot each group individually
+sulfurExprs = list()
+for(i in 1:length(Smet_PathList)){
+  sulfurExprs[[i]] = lapply(Smet_PathList[[i]], function(x) MasterDF[which(MasterDF$IDs %in% x$IDs), ]) 
+}
+names(sulfurExprs) = names(Smet_PathList)
+
+# We drop General S-metabolism to instead focus on more specific parts of the pathway
+sulfurExprs = sulfurExprs[-1]
+# Remove Al from glutamate/glutamine to focus on St
+lapply(sulfurExprs[[1]], function(x) levels(factor(x$Geno)))
+sulfurExprs[[1]][[4]] = sulfurExprs[[1]][[4]] %>% filter(Geno != "Al")
+
+pdf("Figures/Figure6c.pdf", width = 6, height = 4)
+for(i in 1:length(sulfurExprs)){
+  for(j in 1:length(sulfurExprs[[i]])){
+    plot(sulfurExprs[[i]][[j]] %>% 
+           ggplot(aes(x = factor(ZTs, levels = c("1", "7", "13", "19")), 
+                      y = zScore, color = Treatment, group = interaction(Gene, Treatment))) +
+           geom_line() +
+           theme_bw() +
+           xlab("") +
+           scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+           facet_grid(~Geno) +
+           ggtitle(paste(names(sulfurExprs[i]))))
+  }
+}
+dev.off()
+```
+
+Figure 7 - Differential GSL and sulfur content in St and Mu. The raw data can be found at the University of Minnesota's data repository 'DRUM' (https://conservancy.umn.edu/collections/6c548d8b-0f3a-4f6b-b16e-4154c88136c0) under the same name as the manuscript title. See "Methods/Metabolomics" for details on how the data was processed. 
+```{r Figure 7}
+dat = read_xlsx("20241217_Batch3_FixedTechNorm.xlsx", sheet = "R_output_FinalExclude")
+
+# Grab just the gsls
+gsl = dat[, -c(9, 11, 13, 17)]
+# Save the non GSL featuers for later
+NonGSL = dat[, c(1:6, 9, 11, 13, 17)]
+
+# Make SIN and GJV numeric
+gsl = gsl %>% mutate(SIN = as.numeric(SIN))
+gsl = gsl %>% mutate(GJV = as.numeric(GJV))
+gsl = gsl %>% pivot_longer(cols = c(7:13), names_to = "GSL", values_to = "PeakArea")
+NonGSL = NonGSL %>% pivot_longer(cols = c(7:10), names_to = "NonGSL", values_to = "PeakArea")
+
+gsl = gsl %>% mutate(LogArea = log2(PeakArea))
+NonGSL = NonGSL %>% mutate(LogArea = log2(PeakArea))
+# Switch -Inf to NAs
+gsl$LogArea = gsub("-Inf", NA, gsl$LogArea)
+NonGSL$LogArea = gsub("-Inf", NA, NonGSL$LogArea)
+# And make LogArea numeric again
+gsl = gsl %>% mutate(LogArea = as.numeric(LogArea))
+NonGSL = NonGSL %>% mutate(LogArea = as.numeric(LogArea))
+
+# Add a class column
+levels(factor(gsl$GSL))
+
+
+gsl = gsl %>% mutate(Class = case_when(GSL == "4ME (Sm)" ~ "Indolic", 
+                               GSL == "4OH" ~ "Indolic",
+                               GSL == "NAP" ~ "Aliphatic",
+                               GSL == "PRO" ~ "Aliphatic",
+                               GSL == "SIN" ~ "Aliphatic",
+                               GSL == "NAS" ~ "Aromatic", 
+                               GSL == "GJV" ~ "Aliphatic",
+                             TRUE ~ NA))
+
+## Remove datapoints that fell below the limit of detection (Supp fig X)
+gsl = gsl %>% filter(LogArea > 13.3)
+NonGSL = NonGSL %>% filter(LogArea > 13.3)
+
+## Calculate the average of the technical reps to create one datapoint per biological rep
+gsl = gsl %>% group_by(Genotype, Treatment, ZT, GSL, BioRep) %>%
+  mutate(BioRepAvg = mean(LogArea, na.rm = TRUE)) %>% ungroup()
+
+NonGSL =  NonGSL %>% group_by(Genotype, Treatment, ZT, NonGSL, BioRep) %>%
+  mutate(BioRepAvg = mean(LogArea, na.rm = TRUE)) %>% ungroup()
+
+# Pull unique to avoid plotting the same biological rep multiple times
+BioReps = gsl[, -c(5, 8, 9)]
+BioReps = unique(BioReps) # lose 824 rows
+
+GSL_List = split(BioReps, BioReps$GSL)
+
+pdf("Submission2_Fig7V2_GSL_Derivatives.pdf",width = 3.5,height = 3)
+for(i in 1:length(GSL_List)){
+  print(GSL_List[[i]] %>% 
+          filter(Genotype == "Mu" & BioRepAvg != 0) %>%
+          ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
+          geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+          geom_point(position=position_dodge(.73)) +
+          scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          theme_bw() +
+          theme(legend.position = "bottom", legend.title = element_blank()) +
+          xlab("ZT (hours after lights on)") +
+          ylab("Log2 Peak Area") +
+          ggtitle(paste("Mu:"), names(GSL_List[i])))
+  
+  print(GSL_List[[i]] %>% 
+          filter(Genotype == "St"& BioRepAvg != 0) %>%
+          ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
+          geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+          geom_point(position=position_dodge(.73)) +
+          scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+          theme_bw() +
+          theme(legend.position = "bottom", legend.title = element_blank()) +
+          xlab("ZT (hours after lights on)") +
+          ylab("Log2 Peak Area") +
+          ggtitle(paste("St:"), names(GSL_List[i]))) 
+}
+dev.off()
+
+
+## Plot SQ 
+NonGSL %>% filter(NonGSL == "SQ") %>% 
+  ggplot(aes(x = factor(ZT), y = BioRepAvg, fill = factor(Treatment), color = Treatment)) +
+  geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+  geom_point(position=position_dodge(.73)) +
+  scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Log2 Peak Area") +
+  facet_wrap(~Genotype)
+
+
+## Calculate the sum of each class across biological replicates
+ClassGSLs = BioReps %>% group_by(Genotype, Treatment, ZT, BioRep, Class) %>% 
+  mutate(ClassSum = sum(BioRepAvg, na.rm = TRUE)) %>% ungroup()
+
+### Plot total GSLs
+# Save as pdfs
+ClassList = split(ClassGSLs, ClassGSLs$Class)
+
+pdf("Submission2_Fig7V4_TotalGSLs.pdf",width = 6,height = 3)
+for(i in 1:length(ClassList)){
+  print(ClassList[[i]] %>% 
+  filter(Genotype == "Mu"& ClassSum >0) %>%
+    ggplot(aes(x = factor(ZT), y = ClassSum, fill = factor(Treatment), color = Treatment)) +
+    geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+    geom_point(position=position_dodge(.73)) +
+    scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+    scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_grid(~Class) +
+  force_panelsizes(respect = TRUE) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Sum Log2 Peak Area") +
+  ggtitle(paste("Mu:"), names(ClassList[i])))
+
+print(ClassList[[i]] %>% 
+  filter(Genotype == "St" & ClassSum >0) %>%
+    ggplot(aes(x = factor(ZT), y = ClassSum, fill = factor(Treatment), color = Treatment)) +
+    geom_boxplot(alpha = .6, outlier.colour = NA, outlier.fill = NA) +
+    geom_point(position=position_dodge(.73)) +
+    scale_fill_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+    scale_color_manual(values = c("chartreuse4", "darkgoldenrod2")) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  facet_grid(~Class) +
+  force_panelsizes(respect = TRUE) +
+  xlab("ZT (hours after lights on)") +
+  ylab("Sum Log2 Peak Area") +
+  ggtitle(paste("St:"), names(ClassList[i]))) 
+}
+dev.off()
+```
+
+```{r Stats for Figure 7}
+## Total GSLs by Class
+st_aliphatic = gsl %>% filter(Genotype == "St" & Class == "Aliphatic")
+aov1 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_aliphatic)
+summary(aov1)
+TukeyHSD(aov1)
+
+mu_aliphatic = gsl %>% filter(Genotype == "Mu" & Class == "Aliphatic")
+aov2 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_aliphatic)
+summary(aov2)
+#TukeyHSD(aov2)
+
+
+# Indolic
+st_indolic = gsl %>% filter(Genotype == "St" & Class == "Indolic")
+aov3 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_indolic)
+summary(aov3)
+
+mu_indolic = gsl %>% filter(Genotype == "Mu" & Class == "Indolic")
+aov4 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_indolic)
+summary(aov4)
+
+
+## Figure 7 derivatives
+# 4OH
+st_4oh = gsl %>% filter(Genotype == "St" & GSL == "4OH")
+aov5 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_4oh)
+summary(aov5)
+TukeyHSD(aov5)
+
+mu_4oh = gsl %>% filter(Genotype == "Mu" & GSL == "4OH")
+aov6 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_4oh)
+summary(aov6)
+TukeyHSD(aov6)
+
+st_4me = gsl %>% filter(Genotype == "St" & GSL == "4ME (Sm)")
+aov7 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_4me)
+summary(aov7)
+TukeyHSD(aov7)
+
+mu_4me = gsl %>% filter(Genotype == "Mu" & GSL == "4ME (Sm)")
+aov8 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_4me)
+summary(aov8)
+TukeyHSD(aov8)
+
+
+##### 
+## Supplemental Figure stats
+st_nap = gsl %>% filter(Genotype == "St" & GSL == "NAP")
+aov9 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_nap)
+summary(aov9)
+TukeyHSD(aov9)
+
+mu_nap = gsl %>% filter(Genotype == "Mu" & GSL == "NAP")
+aov10 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_nap)
+summary(aov10)
+TukeyHSD(aov10)
+
+st_pro = gsl %>% filter(Genotype == "St" & GSL == "PRO")
+aov11 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_pro)
+summary(aov11)
+TukeyHSD(aov11)
+
+mu_pro = gsl %>% filter(Genotype == "Mu" & GSL == "PRO")
+aov12 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_pro)
+summary(aov12)
+TukeyHSD(aov12)
+
+st_nas = gsl %>% filter(Genotype == "St" & GSL == "NAS")
+aov13 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_nas)
+summary(aov13)
+TukeyHSD(aov13)
+
+mu_nas = gsl %>% filter(Genotype == "Mu" & GSL == "NAS")
+aov14 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_nas)
+summary(aov14)
+TukeyHSD(aov14)
+
+
+### SQ
+st_sq = NonGSL %>% filter(Genotype == "St" & NonGSL == "SQ")
+aov14 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = st_sq)
+summary(aov14)
+TukeyHSD(aov14)
+
+mu_sq = NonGSL %>% filter(Genotype == "Mu" & NonGSL == "SQ")
+aov15 = aov(BioRepAvg ~ factor(Treatment)*factor(ZT), data = mu_sq)
+summary(aov15)
+TukeyHSD(aov15)
+```
+
+
+Supplemental Figure 8C - Chlorophyll content 
+```{r Supplemental Figure 8C}
+# The first seven lines are metadata; skip
+chl_dat = read_xlsx(file.path(inPath, file = "Bnapus_ChlAssay_Data.xlsx"), skip = 7)
+
+## Focusing on the 1:10 dilutions cause that worked for all samples
+chl_dat = chl_dat[ , -c(7:12)]
+  # For now, remove blank samples
+chl_dat = chl_dat %>% filter(ID != "BLANK")
+
+# Pivot to plot multiple variables at once
+chl_dat = chl_dat %>% 
+  pivot_longer(cols = Conc_663nm:Conc_470nm, 
+               names_to = "Pigment", 
+               values_to = "Concentration")
+
+# Change the names
+chl_dat$Pigment = str_replace_all(chl_dat$Pigment, c("Conc_663nm" = "Chl_a", 
+                                                     "Conc_647nm" = "Chl_b", 
+                                                     "Conc_470nm" = "Carotenoid"))
+
+## Merge chla and b and plot
+chl_dat = chl_dat %>% filter(Pigment != "Carotenoid")
+
+chl_dat = chl_dat %>% 
+  pivot_wider(names_from = Pigment, values_from = Concentration)
+
+chl_dat = chl_dat %>% mutate(TotalChl = Chl_a + Chl_b, 
+                             Ratio = Chl_a/Chl_b)
+
+pdf("Figures/SupplementalFigure6C.pdf", width = 6, height = 4)
+chl_dat %>% 
+  ggplot(aes(x = Genotype, y = TotalChl, 
+             group = interaction(Genotype, Treatment))) +
+  geom_boxplot(aes(fill = Treatment), alpha = .6) +
+  scale_fill_manual(values = c("chartreuse4", "darkgoldenrod1")) +
+  theme_bw() +
+  xlab("") +
+  ylab("mg/L") +
+  ggtitle("Concentration of total chlorophyll")
+dev.off()
+
+## Run t-tests with total Chl
+av_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "Av"))
+st_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "St"))
+ab_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "Ab"))
+dh_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "DH12"))
+ne_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "Ne"))
+mu_Chl_ttest = t.test(TotalChl ~ Treatment, data = chl_dat %>% filter(Genotype == "Mu"))
+
+# Print out the stats
+av_Chl_ttest
+st_Chl_ttest # *** p = 0.003
+ab_Chl_ttest
+dh_Chl_ttest
+ne_Chl_ttest # * p = 0.038
+mu_Chl_ttest
+```
+
+
+Supplemental Figure 10 - Carbon assimilation rates in St and Mu. Load the provided carbon assimilation data and plot. 
+```{r}
+## Bring in the photosynthetic data captured from the LiCOR-6800
+licor = read_xlsx(file.path(inPath, "LicorData_ForR.xlsx"), sheet = 1)
+
+### Focusing on St and Mu for 10, 14, 17, 24 and 28 days post WL 
+  # Make a list based on Experimental day to create individual plots by day
+licor_DayList = split(licor, licor$ExperimentalDay)
+
+
+pdf(file.path(FigPath, "SupplementalFigure8.pdf"))
+for(i in 1:length(licor_DayList)){
+  print(licor_DayList[[i]] %>% 
+          filter(Geno == "St") %>%
+          # Removing plants with oddly shaped leaves
+          filter(PlantID != "WW6" & PlantID != "WW11" & PlantID != "WW4" & PlantID != "WL8") %>%
+          ggplot(aes(x = ZT, y = A, color = Treatment, group = interaction(Treatment, ExperimentalDay, ZT))) +
+    geom_boxplot(outlier.shape = NA) + 
+    geom_point(position = position_dodge(width = 3), alpha = .6) +
+    scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+    ylab("CO2 Assimilation (umols/m2/s)") +
+    xlab("") +
+    ylim(3, 20) +
+      # change the scale to reduce the spacing between the groups of boxplots
+    scale_x_discrete(expand=c(0.8,0)) +
+    ggtitle(paste("St: Carbon assimilation"), names(licor_DayList[i])) +
+      theme_bw() +
+      theme(legend.position = "NONE")
+  )
+  
+  print(licor_DayList[[i]] %>% 
+          filter(Geno == "Mu") %>%
+          ggplot(aes(x = ZT, y = A, color = Treatment, group = interaction(Treatment, ExperimentalDay, ZT))) +
+          geom_boxplot(outlier.shape = NA) + 
+          geom_point(position = position_dodge(width = 3), alpha = .6) +
+          scale_color_manual(values = c("darkgoldenrod2", "chartreuse4")) +
+          ylab("CO2 Assimilation (umols/m2/s)") +
+          xlab("") +
+          ylim(3, 20) +
+          # change the scale to reduce the spacing between the groups of boxplots
+          scale_x_discrete(expand=c(0.8,0)) +
+          ggtitle(paste("Mu: Carbon assimilation"), names(licor_DayList[i])) +
+          theme_bw() +
+          theme(legend.position = "NONE")
+  )
+}
+dev.off()
+```
+
+
+
+
